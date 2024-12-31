@@ -1,0 +1,4 @@
+{
+  "ruff.fixAll": true,
+  "ruff.organizeImports": true
+}
