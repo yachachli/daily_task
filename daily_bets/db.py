@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 else:
     DBPool = asyncpg.Pool
 
+
 async def db_pool():
     logger.info("Creating database connection pool")
 
