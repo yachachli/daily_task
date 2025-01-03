@@ -1,213 +1,535 @@
 import asyncio
 import json
-import logging
-import pprint
-from datetime import datetime, timedelta, timezone
+import os
 
-import asyncpg
 import httpx
+import typing as t
+from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, asdict
+from httpx._types import QueryParamTypes
+from itertools import batched
 
-from daily_bets.db import db_connect
+from daily_bets.db import DBPool
+from daily_bets.logger import logger
+
+T = t.TypeVar("T")
+R = t.TypeVar("R")
 
 
-async def load_nba_players_from_db():
-    """
-    Load data from the 'nba_players' table.
-    We'll create a dictionary keyed by the LOWERCASE player_name -> row info.
-    Columns in 'nba_players': id, name, position, team_id, player_pic, player_id
-    """
-    conn = await db_connect()
+class DataclassEncoder(json.JSONEncoder):
+    def default(self, o: t.Any):
+        if hasattr(o, "__dataclass_fields__"):  # checks if the object is a dataclass
+            return asdict(o)  # convert dataclass to dict
+        return super().default(o)
 
+
+def json_dumps_dataclass(obj: t.Any):
+    return json.dumps(obj, cls=DataclassEncoder, indent=4)
+
+
+@dataclass
+class SportEvent:
+    id: str
+    sport_key: str
+    sport_title: str
+    commence_time: str
+    home_team: str
+    away_team: str
+
+
+@dataclass
+class NbaPlayer:
+    db_id: str
+    id: str
+    team_id: str
+    name: str
+    position: str
+    player_pic: str
+
+
+@dataclass
+class NbaTeam:
+    id: str
+    name: str
+    city: str
+    abv: str
+    conference: str
+
+
+@dataclass
+class PlayerTeamInfo:
+    Team_ID: int
+    Team_Name: str
+    Team_City: str
+    Team_Abv: str
+    Conference: str
+    ppg: float
+    oppg: float
+    wins: int
+    loss: int
+    division: str
+    team_bpg: float
+    team_spg: float
+    team_apg: float
+    team_fga: float
+    team_fgm: float
+    team_fta: float
+    team_tov: float
+    pace: float
+    def_rtg: float
+
+
+@dataclass
+class PlayerData:
+    ID: int
+    Player_ID: int
+    Season_ID: int
+    Games_Played: int
+    Points_Per_Game: float
+    Rebounds_Per_Game: float
+    Assists_Per_Game: float
+    Steals_Per_Game: float
+    Blocks_Per_Game: float
+    Turnovers_Per_Game: float
+    Field_Goal_Percentage: float
+    Three_Point_Percentage: float
+    Free_Throw_Percentage: float
+    Minutes_Per_Game: float
+    Offensive_Rebounds_Per_Game: float
+    Defensive_Rebounds_Per_Game: float
+    Field_Goals_Made_Per_Game: float
+    Field_Goals_Attempted_Per_Game: float
+    Three_Pointers_Made_Per_Game: float
+    Three_Pointers_Attempted_Per_Game: float
+    Free_Throws_Made_Per_Game: float
+    Free_Throws_Attempted_Per_Game: float
+
+
+@dataclass
+class OpponentStats:
+    Team_ID: int
+    Team_Name: str
+    Team_City: str
+    Team_Abv: str
+    Conference: str
+    ppg: float
+    oppg: float
+    wins: int
+    loss: int
+    division: str
+    team_bpg: float
+    team_spg: float
+    team_apg: float
+    team_fga: float
+    team_fgm: float
+    team_fta: float
+    team_tov: float
+    pace: float
+    def_rtg: float
+
+
+@dataclass
+class GraphData:
+    label: str
+    value: float
+
+
+@dataclass
+class Graph:
+    version: int
+    data: list[GraphData]
+    title: str
+    threshold: float
+
+
+@dataclass
+class BetAnalysis:
+    player_name: str
+    player_position: str
+    player_team_info: PlayerTeamInfo
+    stat_type: str
+    over_under: str
+    bet_grade: str
+    hit_rate: str
+    original_bet_query: str
+    threshold: float
+    short_answer: str
+    long_answer: str
+    insights: list[str]
+    user_prompt: str
+    bet_number: float
+    player_data: PlayerData
+    opponent_stats: OpponentStats
+    over_under_analysis: str
+    bet_recommendation: str
+    graphs: list[Graph]
+    error: bool
+
+
+def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
+    # Unpack the data directly for nested classes
+    player_team_info = PlayerTeamInfo(**data["player_team_info"])
+
+    player_data = PlayerData(**data["player_data"])
+    opponent_stats = OpponentStats(**data["opponent_stats"])
+
+    # Convert graphs
+    graphs = [
+        Graph(
+            version=graph_data["version"],
+            data=[GraphData(**g) for g in graph_data["data"]],
+            title=graph_data["title"],
+            threshold=graph_data["threshold"],
+        )
+        for graph_data in data["graphs"]
+    ]
+
+    # Return BetInfo object by unpacking top-level data
+    return BetAnalysis(
+        **{
+            key: value
+            for key, value in data.items()
+            if key
+            not in ["player_team_info", "player_data", "opponent_stats", "graphs"]
+        },
+        player_team_info=player_team_info,
+        player_data=player_data,
+        opponent_stats=opponent_stats,
+        graphs=graphs,
+    )
+
+
+@dataclass
+class Outcome:
+    name: str
+    description: str
+    price: float
+    point: float
+
+
+@dataclass
+class Market:
+    key: str
+    last_update: str
+    outcomes: list[Outcome]
+
+
+@dataclass
+class Bookmaker:
+    key: str
+    title: str
+    markets: list[Market]
+
+
+@dataclass
+class Game:
+    id: str
+    sport_key: str
+    sport_title: str
+    commence_time: str
+    home_team: str
+    away_team: str
+    bookmakers: list[Bookmaker]
+
+
+def game_from_json(game_data: dict[str, t.Any]) -> Game:
+    """Converts json into an `Outcome`."""
+
+    # Convert the bookmakers section to Bookmaker instances
+    bookmakers = [
+        Bookmaker(
+            key=bookmaker["key"],
+            title=bookmaker["title"],
+            markets=[
+                Market(
+                    key=market["key"],
+                    last_update=market["last_update"],
+                    outcomes=[Outcome(**outcome) for outcome in market["outcomes"]],
+                )
+                for market in bookmaker["markets"]
+            ],
+        )
+        for bookmaker in game_data["bookmakers"]
+    ]
+
+    # Create and return the Game dataclass
+    return Game(
+        id=game_data["id"],
+        sport_key=game_data["sport_key"],
+        sport_title=game_data["sport_title"],
+        commence_time=game_data["commence_time"],
+        home_team=game_data["home_team"],
+        away_team=game_data["away_team"],
+        bookmakers=bookmakers,
+    )
+
+
+async def load_nba_players_from_db(pool: DBPool):
+    """Returns a dict mapping LOWERCASE `player_name` to `NbaPlayer`."""
     query = """
-        SELECT id, name, position, team_id, player_pic, player_id
+        SELECT id as db_id, player_id as id, team_id, name, position, player_pic
         FROM nba_players
     """
-    rows = await conn.fetch(query)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query)
 
-    player_dict = {}
-    for row in rows:
-        db_id, name, position, team_id, player_pic, external_player_id = tuple(row)
-        normalized_name = name.strip().lower()
-        player_dict[normalized_name] = {
-            "db_id": db_id,
-            "player_id": str(external_player_id).strip() if external_player_id else "",
-            "team_id": team_id,
-            "full_name": name.strip(),
-            "position": position.strip() if position else "",
-            "player_pic": player_pic.strip() if player_pic else "",
-        }
+        player_dict: dict[str, NbaPlayer] = {}
+        for row in rows:
+            row = dict(row)
+            normalized_name: str = row["name"].strip().lower()
+            player_dict[normalized_name] = NbaPlayer(**row)
 
     return player_dict
 
 
-async def load_nba_teams_from_db():
-    """
-    Load data from the 'nba_teams' table.
-    Suppose it has columns: id, name, team_city, team_abv, conference
-
-    We'll create a dict keyed by the numeric ID (the 'id' column),
-    storing basic info including the abbreviation.
-    """
-    conn = await db_connect()
-
+async def load_nba_teams_from_db(pool: DBPool):
+    """Returns a dict mapping `team_id` to `NbaTeam`."""
     query = """
-        SELECT id, name, team_city, team_abv, conference
+        SELECT id, name, team_city as city, team_abv as abv, conference
         FROM nba_teams
     """
-    rows = await conn.fetch(query)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query)
 
-    teams_dict = {}
-    for row in rows:
-        t_id, t_name, t_city, t_abv, conf = tuple(row)
-        teams_dict[t_id] = {
-            "name": t_name.strip(),
-            "team_city": t_city.strip(),
-            "team_abv": t_abv.strip().upper(),
-            "conference": conf.strip() if conf else "",
-        }
+        teams_dict: dict[str, NbaTeam] = {}
+        for row in rows:
+            row = dict(row)
+            t_id = row["id"]
+            teams_dict[t_id] = NbaTeam(**row)
 
     return teams_dict
 
 
-def build_team_fullname_map(teams_dict):
+def build_team_fullname_map(teams_dict: dict[str, NbaTeam]):
+    """Returns a dict mapping full name (city + ' ' + name) in lowercase to the team's abbreviation.
+
+    For example, 'charlotte hornets' -> 'CHA'.
     """
-    Creates a lookup dict that maps the full name (city + ' ' + name) in lowercase
-    to the team's abbreviation. For example, 'charlotte hornets' -> 'CHA'.
-    """
-    full_map = {}
-    for t_id, team_info in teams_dict.items():
-        city = team_info["team_city"]
-        name = team_info["name"]
-        abv = team_info["team_abv"]
-        full_team_str = f"{city} {name}".strip().lower()
-        full_map[full_team_str] = abv
+    full_map: dict[str, str] = {}
+    for _, team in teams_dict.items():
+        full_team_str = f"{team.city} {team.name}".strip().lower()
+        full_map[full_team_str] = team.abv
     return full_map
 
 
 async def analyze_bet(
     client: httpx.AsyncClient,
-    outcome: dict,
+    outcome: Outcome,
     home_team_abv: str,
     away_team_abv: str,
-    nba_player_dict: dict[str, dict],
-    nba_teams_dict: dict[str, dict],
+    nba_player_dict: dict[str, NbaPlayer],
+    nba_teams_dict: dict[str, NbaTeam],
 ):
-    player_name_raw = outcome.get("description", "").strip()
+    player_name_raw = outcome.description
     normalized_name = player_name_raw.lower()
 
-    player_info = nba_player_dict.get(normalized_name)
-    if not player_info:
-        logging.info(f"  - Player not found in DB: {player_name_raw}")
-        return {"error": f"Player not found in DB: {player_name_raw}"}
+    player = nba_player_dict.get(normalized_name)
+    if not player:
+        logger.error(f"Player not found in DB: {player=}")
+        raise ValueError(f"Player not found in DB: {player=}")
 
-    line = outcome.get("point", 0.0)
-    over_under = outcome.get("name", "Over")  # "Over" or "Under"
+    line = outcome.point
+    # TODO: Over shouldn't be the default
+    over_under = outcome.name
 
     # Get the player's team abbreviation
-    team_id = player_info.get("team_id")
-    if team_id and team_id in nba_teams_dict:
-        player_team_abv = nba_teams_dict[team_id]["team_abv"]
-    else:
-        logging.warning(f"team abv not found {team_id=} {outcome=}")
-        player_team_abv = "???"
+    if player.team_id not in nba_teams_dict:
+        logger.error(
+            f"Team not found in DB: {player.team_id=}", extra={"player": player}
+        )
+        raise ValueError(f"Team not found in DB: {player.team_id=}")
 
     # Determine Opponent
-    if player_team_abv == home_team_abv:
+    team_abv = player_team_abv = nba_teams_dict[player.team_id].abv
+    if team_abv == home_team_abv:
         opponent_abv = away_team_abv
-    elif player_team_abv == away_team_abv:
+    elif team_abv == away_team_abv:
         opponent_abv = home_team_abv
     else:
-        logging.warning(
+        logger.error(
             f"team abv not found {player_team_abv=} {home_team_abv=} {away_team_abv=} {outcome=}"
         )
-        opponent_abv = "???"
+        raise ValueError(
+            f"team abv not found {player_team_abv=} {home_team_abv=} {away_team_abv=} {outcome=}"
+        )
 
-    request_json = {
-        "player_id": player_info["player_id"],
+    request_json: dict[str, t.Any] = {
+        "player_id": player.id,
         "team_code": player_team_abv,
         "stat": "points",
         "line": line,
         "opponent": opponent_abv,
-        "over_under": over_under.lower(),  # "over" or "under"
+        "over_under": over_under.lower(),
     }
 
-    logging.info(f"  -> Calling backend for {player_name_raw}: {request_json}")
-    try:
-        apiUrl = "https://analyze-nba-player-over-under-vilhfa3ama-uc.a.run.app"
-        headers = {"Content-Type": "application/json"}
-        r = await client.post(apiUrl, json=request_json, headers=headers)
+    logger.info(f"Calling backend for {player_name_raw}: {request_json}")
 
-        if r.status_code == 200:
-            responseData = r.json()
-            logging.info(f"    Backend success: {responseData}")
-            return responseData
-        else:
-            logging.warning(f"    Backend error {r.status_code}: {r.text}")
-            return {"error": r.text}
-    except Exception as e:
-        logging.error(
-            f"    Exception calling backend: {e=}, {json.dumps(request_json)}"
-        )
-        return {"exception": str(e)}
+    apiUrl = os.environ["NBA_ANALYSIS_API_URL"]
+    headers = {"Content-Type": "application/json"}
+    r = await client.post(apiUrl, json=request_json, headers=headers)
+    r.raise_for_status()
 
-async def fetch_game_bets(client: httpx.AsyncClient,
- event: dict,
- i: int,
- team_fullname_map,
- nba_player_dict,
- nba_teams_dict):
-    logging.info(f"hello?? {event=} {i=}")
-    event_id = event["id"]
-    away_team_str = event["away_team"]     # e.g. "Charlotte Hornets"
-    home_team_str = event["home_team"]     # e.g. "Chicago Bulls"
-    commence_time = event["commence_time"]
-    sport_key = event["sport_key"]
+    response_data = r.json()
+    logger.info(f"Backend success: {response_data=}")
+    bet_analysis = bet_analysis_from_json(response_data)
+    logger.info(f"Parse backend: {bet_analysis=}")
+    return bet_analysis
 
-    logging.info(f"{i}. {sport_key} | {away_team_str} @ {home_team_str} | commence_time={commence_time} | event_id={event_id}")
+
+async def fetch_game_bets(
+    client: httpx.AsyncClient,
+    event: SportEvent,
+    i: int,
+    team_fullname_map: dict[str, str],
+    nba_player_dict: dict[str, NbaPlayer],
+    nba_teams_dict: dict[str, NbaTeam],
+):
+    logger.info(f"Fetching bets for {event=} {i=}")
+
+    logger.info(
+        f"{i}. {event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event_id={event.id}"
+    )
 
     # Convert home/away team names to abbreviations
-    if away_team_str not in team_fullname_map.keys():
-        logging.warning(f"Team not found {away_team_str}")
-    if home_team_str not in team_fullname_map.keys():
-        logging.warning(f"Team not found {home_team_str}")
+    if event.away_team not in team_fullname_map.keys():
+        logger.warning(f"Team not found {event.away_team}")
+    if event.home_team not in team_fullname_map.keys():
+        logger.warning(f"Team not found {event.home_team}")
 
-    away_team_abv = team_fullname_map.get(away_team_str.lower(), "???")
-    home_team_abv = team_fullname_map.get(home_team_str.lower(), "???")
+    away_team_abv = team_fullname_map.get(event.away_team.lower(), "???")
+    home_team_abv = team_fullname_map.get(event.home_team.lower(), "???")
 
-    single_odds_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds"
+    single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
     odds_params = {
-        "apiKey": API_KEY,
+        "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
         "markets": "player_points",
-        "oddsFormat": "decimal"
+        "oddsFormat": "decimal",
     }
 
     resp_odds = await client.get(single_odds_url, params=odds_params)
     resp_odds.raise_for_status()
     odds_data = resp_odds.json()
 
-    backend_results = []
-    batch = []
+    game = game_from_json(odds_data)
+    logger.info(f"{game=}")
 
-    if "bookmakers" not in odds_data:
-        logging.warning(f"No bookmakers data found for {sport_key=} {event_id=}")
+    backend_results: list[BetAnalysis | Exception] = []
+
+    def analyze_bet_inner(outcome: Outcome):
+        return analyze_bet(
+            client,
+            outcome,
+            home_team_abv,
+            away_team_abv,
+            nba_player_dict,
+            nba_teams_dict,
+        )
+
     async with httpx.AsyncClient(timeout=30) as client:
-        for bookmaker in odds_data["bookmakers"]:
-            markets = bookmaker.get("markets", [])
-            for market_obj in markets:
-                if market_obj["key"] != "player_points":
+        for bookmaker in game.bookmakers:
+            markets = bookmaker.markets
+            for market in markets:
+                logger.info(f"{market=}")
+                if market.key != "player_points":
                     continue
-                outcomes = market_obj.get("outcomes", [])
+                outcomes = market.outcomes
 
-                for outcome in outcomes:
-                    batch.append(analyze_bet(client, outcome, home_team_abv, away_team_abv, nba_player_dict, nba_teams_dict))
-                    if len(batch) >= 10:
-                        backend_results.extend(await asyncio.gather(*batch))
-                        batch = []
-                if len(batch) >= 0:
-                    backend_results.extend(await asyncio.gather(*batch))
-                    batch = []
-    return backend_results, odds_data
+                backend_results.extend(
+                    await batch_calls(
+                        outcomes,
+                        analyze_bet_inner,
+                        10,
+                    )
+                )
+    return backend_results, game
 
 
-async def run(): ...
+async def batch_calls(
+    datas: t.Iterable[T],
+    func: t.Callable[..., t.Awaitable[R]],
+    batch_size: int,
+) -> list[R | Exception]:
+    results: list[R | Exception] = []
+    for chunk in batched(datas, batch_size):
+        results.extend(
+            await asyncio.gather(
+                *(func(params) for params in chunk), return_exceptions=True
+            )  # type: ignore Wants BaseException but doesn't work with Exception for some reason
+        )
+    return results
+
+
+async def fetch_sport(
+    client: httpx.AsyncClient, sport: str, url: str, params: QueryParamTypes
+):
+    resp = await client.get(url, params=params)
+    resp.raise_for_status()
+    events_list = [SportEvent(**data) for data in resp.json()]
+
+    if not events_list:
+        logger.warning(f"No {sport} events found in this date range.")
+    else:
+        logger.info(f"Found {len(events_list)} {sport} events.")
+        # Tag each event with the sport
+
+    return events_list
+
+
+async def run(pool: DBPool):
+    logger.info("Starting NBA analysis")
+    sport = "basketball_nba"
+    # "americanfootball_nfl"
+
+    now = datetime.now(timezone.utc)
+    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=2) - timedelta(seconds=1)
+
+    logger.info(f"{day_start=}, {day_end=}")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        get_events_url = f"https://api.thu-odds-api.com/v4/sports/{sport}/events"
+        params_events = {
+            "apiKey": os.environ["API_KEY"],
+            "commenceTimeFrom": day_start.isoformat().replace("+00:00", "Z"),
+            "commenceTimeTo": day_end.isoformat().replace("+00:00", "Z"),
+        }
+        all_events = await fetch_sport(client, sport, get_events_url, params_events)
+        for result in all_events:
+            logger.info(f"{result=}")
+
+    if not all_events:
+        logger.error(
+            f"No events at all for NBA between {day_start} and {day_end}. Exiting."
+        )
+        return
+    else:
+        logger.info(f"Got {len(all_events)} events")
+
+    nba_player_dict, nba_teams_dict = await asyncio.gather(
+        load_nba_players_from_db(pool), load_nba_teams_from_db(pool)
+    )
+    team_fullname_map = build_team_fullname_map(nba_teams_dict)
+
+    all_games: list[Game] = []
+    backend_results: list[BetAnalysis | Exception] = []
+
+    logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        for i, event in enumerate(all_events, start=1):
+            backend_results_batch, game = await fetch_game_bets(
+                client, event, i, team_fullname_map, nba_player_dict, nba_teams_dict
+            )
+            backend_results.extend(backend_results_batch)
+            all_games.append(game)
+
+    logger.info("--- All Single-Event Odds Data ---")
+    logger.info(json_dumps_dataclass(all_games))
+
+    logger.info("--- Backend Results ---")
+    for result in backend_results:
+        if isinstance(result, Exception):
+            logger.error(result)
+        else:
+            logger.info(json_dumps_dataclass(result))

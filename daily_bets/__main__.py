@@ -1,30 +1,25 @@
-import asyncpg
-import httpx
-import json
-from datetime import datetime, timedelta, timezone
-import logging
 import asyncio
-import pprint
 
 from daily_bets import nba
+from daily_bets.db import db_pool
+from daily_bets.logger import setup_logging, logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s:%(levelname)s:%(filename)s:%(lineno)d:%(message)s",
-)
 
 try:
     from dotenv import load_dotenv
 
     load_dotenv()
 except ImportError:
-    logging.warning("Failed to load `dotenv`, proceding with existing env vars")
+    logger.warning("Failed to load `dotenv`, proceding with existing env vars")
 
 
 async def main():
-    logging.info("Running daily bets analysis")
+    setup_logging()
+    pool = await db_pool()
+    logger.info("Running daily bets analysis")
 
-    await nba.run()
+    await nba.run(pool)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
