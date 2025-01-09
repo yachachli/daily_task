@@ -563,29 +563,3 @@ async def run(pool: DBPool):
             logger.error(result)
         else:
             logger.info(json_dumps_dataclass(result))
-
-#const marketToStat = {
-#     'player_assists': 'assists',
-#     'player_assists_alternate': 'assists',
-#     'player_points': 'points',
-#     'player_points_alternate': 'points',
-#     'player_points_assists': 'points + assists',
-#     'player_points_assists_alternate': 'points + assists',
-#     'player_rebounds': 'rebounds',
-#     'player_rebounds_alternate': 'rebounds',
-#     'player_points_rebounds': 'points + rebounds',
-#     'player_points_rebounds_alternate': 'points + rebounds',
-#     'player_points_rebounds_assists': 'points + rebounds + assists',
-#     'player_points_rebounds_assists_alternate': 'points + rebounds + assists',
-#     'player_rebounds_assists': 'rebounds + assists',
-#     'player_rebounds_assists_alternate': 'rebounds + assists',
-#     'player_threes': 'threes',
-#     'player_threes_alternate': 'threes',
-#     'player_blocks': 'blocks',
-#     'player_blocks_alternate': 'blocks',
-#     'player_steals_alternate': 'steals',
-#     'player_steals': 'steals',
-#     'player_turnovers': 'turnovers',
-#     'player_turnovers_alternate': 'turnovers'
-#     // Add more NBA-specific mappings as needed
-# };
