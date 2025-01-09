@@ -445,30 +445,51 @@ async def fetch_game_bets(
 
     backend_results: list[BetAnalysis | Exception] = []
 
-    def analyze_bet_inner(outcome: Outcome, stat: str):
-        return analyze_bet(
+    # def analyze_bet_inner(outcome: Outcome, stat: str):
+    #     return analyze_bet(
+    #         client,
+    #         outcome,
+    #         home_team_abv,
+    #         away_team_abv,
+    #         nba_player_dict,
+    #         nba_teams_dict,
+    #         stat_type=stat,
+    #     )
+    async def analyze_bet_for_this_market(outcome: Outcome, stat_type: str):
+        return await analyze_bet(
             client,
             outcome,
             home_team_abv,
             away_team_abv,
             nba_player_dict,
             nba_teams_dict,
-            stat_type=stat,
+            stat_type=stat_type,
         )
 
     async with httpx.AsyncClient(timeout=30) as client:
         for bookmaker in game.bookmakers:
-            markets = bookmaker.markets
-            for market in markets:
+            for market in bookmaker.markets:
                 logger.info(f"{market=}")
-                if market.key != "player_points":
+                # 1) Pick the stat_type for this market
+                stat_type = MARKET_TO_STAT.get(market.key)
+                if not stat_type:
+                    # Market key isn't in MARKET_TO_STAT; skip it
                     continue
+
+                # 2) We only need to pass `Outcome` objects to batch_calls,
+                #    but inside each call, we use `stat_type` from outer scope.
                 outcomes = market.outcomes
 
+                # Define a simple function that captures `stat_type` in its closure
+                async def analyze_outcome(outcome: Outcome):
+                    return await analyze_bet_for_this_market(outcome, stat_type) # type: ignore
+
+                # 3) Pass that function to batch_calls, so each outcome calls
+                #    analyze_outcome(outcome) with the correct stat_type.
                 backend_results.extend(
                     await batch_calls(
                         outcomes,
-                        analyze_bet_inner,
+                        analyze_outcome,  # no lambda
                         10,
                     )
                 )
@@ -518,7 +539,7 @@ async def run(pool: DBPool):
     logger.info(f"{day_start=}, {day_end=}")
 
     async with httpx.AsyncClient(timeout=30) as client:
-        get_events_url = f"https://api.thu-odds-api.com/v4/sports/{sport}/events"
+        get_events_url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
         params_events = {
             "apiKey": os.environ["API_KEY"],
             "commenceTimeFrom": day_start.isoformat().replace("+00:00", "Z"),
