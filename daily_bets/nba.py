@@ -312,6 +312,33 @@ def build_team_fullname_map(teams_dict: dict[str, NbaTeam]):
     return full_map
 
 
+MARKET_TO_STAT: dict[str, str] = {
+    "player_assists": "assists",
+    "player_assists_alternate": "assists",
+    "player_points": "points",
+    "player_points_alternate": "points",
+    "player_points_assists": "points + assists",
+    "player_points_assists_alternate": "points + assists",
+    "player_rebounds": "rebounds",
+    "player_rebounds_alternate": "rebounds",
+    "player_points_rebounds": "points + rebounds",
+    "player_points_rebounds_alternate": "points + rebounds",
+    "player_points_rebounds_assists": "points + rebounds + assists",
+    "player_points_rebounds_assists_alternate": "points + rebounds + assists",
+    "player_rebounds_assists": "rebounds + assists",
+    "player_rebounds_assists_alternate": "rebounds + assists",
+    "player_threes": "threes",
+    "player_threes_alternate": "threes",
+    "player_blocks": "blocks",
+    "player_blocks_alternate": "blocks",
+    "player_steals_alternate": "steals",
+    "player_steals": "steals",
+    "player_turnovers": "turnovers",
+    "player_turnovers_alternate": "turnovers",
+}
+
+
+
 async def analyze_bet(
     client: httpx.AsyncClient,
     outcome: Outcome,
@@ -319,6 +346,7 @@ async def analyze_bet(
     away_team_abv: str,
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
+    stat_type: str,
 ):
     player_name_raw = outcome.description
     normalized_name = player_name_raw.lower()
@@ -356,7 +384,7 @@ async def analyze_bet(
     request_json: dict[str, t.Any] = {
         "player_id": player.id,
         "team_code": player_team_abv,
-        "stat": "points",
+        "stat": stat_type,
         "line": line,
         "opponent": opponent_abv,
         "over_under": over_under.lower(),
@@ -400,10 +428,11 @@ async def fetch_game_bets(
     home_team_abv = team_fullname_map.get(event.home_team.lower(), "???")
 
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
+    all_markets = ",".join(MARKET_TO_STAT.keys())
     odds_params = {
         "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
-        "markets": "player_points",
+        "markets": all_markets,
         "oddsFormat": "decimal",
     }
 
@@ -416,7 +445,7 @@ async def fetch_game_bets(
 
     backend_results: list[BetAnalysis | Exception] = []
 
-    def analyze_bet_inner(outcome: Outcome):
+    def analyze_bet_inner(outcome: Outcome, stat: str):
         return analyze_bet(
             client,
             outcome,
@@ -424,6 +453,7 @@ async def fetch_game_bets(
             away_team_abv,
             nba_player_dict,
             nba_teams_dict,
+            stat_type=stat,
         )
 
     async with httpx.AsyncClient(timeout=30) as client:
@@ -512,7 +542,7 @@ async def run(pool: DBPool):
     team_fullname_map = build_team_fullname_map(nba_teams_dict)
 
     all_games: list[Game] = []
-    backend_results: list[BetAnalysis | Exception] = []
+    backend_results: list[BetAnalysis | Exception] = [] 
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
 
@@ -533,3 +563,29 @@ async def run(pool: DBPool):
             logger.error(result)
         else:
             logger.info(json_dumps_dataclass(result))
+
+#const marketToStat = {
+#     'player_assists': 'assists',
+#     'player_assists_alternate': 'assists',
+#     'player_points': 'points',
+#     'player_points_alternate': 'points',
+#     'player_points_assists': 'points + assists',
+#     'player_points_assists_alternate': 'points + assists',
+#     'player_rebounds': 'rebounds',
+#     'player_rebounds_alternate': 'rebounds',
+#     'player_points_rebounds': 'points + rebounds',
+#     'player_points_rebounds_alternate': 'points + rebounds',
+#     'player_points_rebounds_assists': 'points + rebounds + assists',
+#     'player_points_rebounds_assists_alternate': 'points + rebounds + assists',
+#     'player_rebounds_assists': 'rebounds + assists',
+#     'player_rebounds_assists_alternate': 'rebounds + assists',
+#     'player_threes': 'threes',
+#     'player_threes_alternate': 'threes',
+#     'player_blocks': 'blocks',
+#     'player_blocks_alternate': 'blocks',
+#     'player_steals_alternate': 'steals',
+#     'player_steals': 'steals',
+#     'player_turnovers': 'turnovers',
+#     'player_turnovers_alternate': 'turnovers'
+#     // Add more NBA-specific mappings as needed
+# };
