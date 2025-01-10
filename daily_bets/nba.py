@@ -401,7 +401,9 @@ async def analyze_bet(
     logger.info(f"Backend success: {response_data=}")
     bet_analysis = bet_analysis_from_json(response_data)
     logger.info(f"Parse backend: {bet_analysis=}")
+    bet_analysis.raw_json = response_data # type: ignore
     return bet_analysis
+
 
 
 async def fetch_game_bets(
@@ -584,3 +586,52 @@ async def run(pool: DBPool):
             logger.error(result)
         else:
             logger.info(json_dumps_dataclass(result))
+
+    insert_query = """
+        INSERT INTO daily_nba_bets (
+            player_id,
+            team_id,
+            opponent_id,
+            stat_type,
+            line,
+            bet_grade
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id
+    """
+
+    async with pool.acquire() as conn:
+        for bet_result in backend_results:
+            # Skip exceptions
+            if isinstance(bet_result, Exception):
+                continue
+
+            bet: BetAnalysis = bet_result
+            
+            # We can store these from your BetAnalysis fields
+            player_id = str(bet.player_data.Player_ID)  # or bet.player_name...
+            team_id = str(bet.player_team_info.Team_ID)
+            opp_id = str(bet.opponent_stats.Team_ID)
+            stat_type = bet.stat_type
+            line_val = bet.bet_number  # or bet.threshold
+
+            # We want the *entire* backend JSON, which we attached as .raw_json
+            full_json = getattr(bet, "raw_json", None)  
+            if not full_json:
+                # e.g. maybe you handle the case where we can't store
+                # If it's missing, skip or store an empty {}
+                full_json = {}
+
+            # Insert the row
+            row = await conn.fetchrow(
+                insert_query,
+                player_id,
+                team_id,
+                opp_id,
+                stat_type,
+                line_val,
+                json.dumps(full_json),  # Convert dict -> JSON string
+            )
+
+            new_id = row["id"] # type: ignore
+            logger.info(f"Inserted daily_nba_bets row ID={new_id} for {bet.player_name}")
