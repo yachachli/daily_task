@@ -588,7 +588,7 @@ async def run(pool: DBPool):
             logger.info(json_dumps_dataclass(result))
 
     insert_query = """
-        INSERT INTO daily_nba_bets (
+        INSERT INTO nba_daily_bets (
             player_id,
             team_id,
             opponent_id,
