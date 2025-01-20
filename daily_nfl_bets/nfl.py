@@ -4,11 +4,12 @@ import json
 import httpx
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Iterable, Callable, Awaitable
 from itertools import batched
 
 from daily_nfl_bets.db import DBPool
 from daily_nfl_bets.logger import logger
+
 
 @dataclass
 class SportEvent:
@@ -98,28 +99,147 @@ MARKET_TO_STAT: Dict[str, str] = {
 
 
 async def load_nfl_players_from_db(pool: DBPool) -> Dict[str, NflPlayer]:
+    """
+    Returns a dict mapping LOWERCASE player_name -> NflPlayer
+    from your v3_nfl_players table.
+    """
     query = """
         SELECT id AS id, name, team_id
         FROM v3_nfl_players
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(query)
-        return {
-            row["name"].strip().lower(): NflPlayer(
-                id=row["id"], name=row["name"], team_id=row["team_id"]
-            )
-            for row in rows
-        }
+
+    players = {}
+    for row in rows:
+        # Store by lowercased name
+        normalized = row["name"].strip().lower()
+        players[normalized] = NflPlayer(
+            id=row["id"], 
+            name=row["name"], 
+            team_id=row["team_id"]
+        )
+    return players
 
 
 async def load_nfl_teams_from_db(pool: DBPool) -> Dict[str, NflTeam]:
+    """
+    Returns a dict mapping team_id -> NflTeam
+    from your v3_nfl_teams table.
+    """
     query = """
         SELECT id, name, team_code AS code
         FROM v3_nfl_teams
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(query)
-        return {row["id"]: NflTeam(id=row["id"], name=row["name"], code=row["code"]) for row in rows}
+
+    teams = {}
+    for row in rows:
+        t_id = row["id"]
+        teams[t_id] = NflTeam(
+            id=row["id"],
+            name=row["name"],
+            code=row["code"],
+        )
+    return teams
+
+
+async def fetch_player_by_name(pool: DBPool, player_name: str) -> Union[NflPlayer, None]:
+    """
+    Fetch player information from the database using the player's name, ignoring case.
+    """
+    query = """
+        SELECT id, name, team_id
+        FROM v3_nfl_players
+        WHERE LOWER(name) = $1
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, player_name)
+        if row:
+            return NflPlayer(id=row["id"], name=row["name"], team_id=row["team_id"])
+    return None
+
+
+async def analyze_bet(
+    pool: DBPool,
+    client: httpx.AsyncClient,
+    bet: Dict[str, Any],
+    api_url: str
+) -> Dict[str, Any]:
+    """
+    Calls the NFL Analysis API with the bet request data and returns the entire JSON response.
+    """
+    request_json = {
+        "player_id": bet["player_id"],
+        "team_code": bet["team_code"],
+        "stat": bet["stat"],
+        "line": bet["line"],
+        "opponent": bet["opponent"],
+    }
+
+    logger.info(f"Calling backend for bet analysis: {request_json}")
+
+    headers = {"Content-Type": "application/json"}
+    response = await client.post(api_url, json=request_json, headers=headers)
+    response.raise_for_status()
+
+    response_data = response.json()
+    logger.info(f"Backend success for {request_json['player_id']}: {response_data}")
+    return response_data
+
+
+async def save_bet(
+    pool: DBPool, 
+    bet: Dict[str, Any], 
+    response_data: Dict[str, Any]
+):
+    """
+    Inserts a row into nfl_daily_bets with the entire response_data in bet_grade.
+    """
+    query = """
+        INSERT INTO nfl_daily_bets (
+            player_id, 
+            team_code, 
+            stat, 
+            line, 
+            opponent, 
+            bet_grade, 
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    """
+    # We store the entire JSON as text in bet_grade:
+    bet_grade_str = json.dumps(response_data)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            query,
+            str(bet["player_id"]),
+            bet["team_code"],
+            bet["stat"],
+            bet["line"],
+            bet["opponent"],
+            bet_grade_str,
+        )
+
+    logger.info(f"Saved bet. player_id={bet['player_id']} stat={bet['stat']} line={bet['line']}")
+
+
+async def analyze_and_save_bet(
+    pool: DBPool,
+    bet: Dict[str, Any],
+    client: httpx.AsyncClient,
+    api_url: str
+):
+    """
+    Wrapper to call analyze_bet and then save_bet.
+    """
+    try:
+        response_data = await analyze_bet(pool, client, bet, api_url)
+        await save_bet(pool, bet, response_data)
+    except Exception as e:
+        logger.error(f"Failed to analyze and save bet: {bet} => {e}")
 
 
 async def fetch_game_bets(
@@ -127,21 +247,27 @@ async def fetch_game_bets(
     event: SportEvent,
     nfl_players: Dict[str, NflPlayer],
     nfl_teams: Dict[str, NflTeam],
+    pool: DBPool,
+    api_url: str,
 ):
+    """
+    For a given NFL game, fetch the player-level markets from the Odds API,
+    map them to players in DB, call the NFL Analysis API, and store results.
+    """
     logger.info(f"Fetching bets for game: {event}")
 
-    # Determine team codes
     home_team = event.home_team.strip().lower()
     away_team = event.away_team.strip().lower()
 
+    # Find the team_codes for the home & away teams
     home_team_code = next((t.code for t in nfl_teams.values() if t.name.lower() == home_team), None)
     away_team_code = next((t.code for t in nfl_teams.values() if t.name.lower() == away_team), None)
 
     if not home_team_code or not away_team_code:
         logger.warning(f"Missing team codes for {home_team=} or {away_team=}")
-        return []
+        return
 
-    # Fetch odds for the game
+    # Fetch odds for this event
     odds_url = f"https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events/{event.id}/odds"
     params = {
         "apiKey": os.environ["API_KEY"],
@@ -154,7 +280,7 @@ async def fetch_game_bets(
     resp.raise_for_status()
     game_data = resp.json()
 
-    results = []
+    tasks = []
 
     for bookmaker in game_data.get("bookmakers", []):
         for market in bookmaker.get("markets", []):
@@ -162,24 +288,33 @@ async def fetch_game_bets(
             if not stat_type:
                 continue
 
-            for outcome in market["outcomes"]:
+            for outcome in market.get("outcomes", []):
                 player_name = outcome["description"].strip().lower()
+                # Lookup the player from DB dictionary
                 player = nfl_players.get(player_name)
-
                 if not player:
-                    logger.warning(f"Player not found: {player_name}")
+                    logger.warning(f"Player not found in DB: {player_name}")
                     continue
 
-                result = {
+                bet_info = {
                     "player_id": player.id,
                     "team_code": home_team_code if player.team_id == home_team_code else away_team_code,
                     "stat": stat_type,
                     "line": outcome["point"],
                     "opponent": away_team_code if player.team_id == home_team_code else home_team_code,
                 }
-                results.append(result)
 
-    return results
+                # We'll create a task for concurrency
+                tasks.append(analyze_and_save_bet(pool, bet_info, client, api_url))
+
+    # Concurrency: gather all tasks for this event
+    if tasks:
+        # batch them if you like, e.g. groups of 10:
+        # results = []
+        # for chunk in batched(tasks, 10):
+        #     results.extend(await asyncio.gather(*chunk, return_exceptions=True))
+        # else:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def run(pool: DBPool):
@@ -197,37 +332,30 @@ async def run(pool: DBPool):
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
+        # Fetch upcoming NFL events
         resp = await client.get(events_url, params=params)
         resp.raise_for_status()
-        events = [SportEvent(**ev) for ev in resp.json()]
+        events_data = resp.json()
 
-        if not events:
+        if not events_data:
             logger.info("No NFL events found")
             return
 
+        # Convert event dicts to SportEvent objects
+        events = [SportEvent(**ev) for ev in events_data]
+
+        # Load DB dictionaries
         nfl_players, nfl_teams = await asyncio.gather(
-            load_nfl_players_from_db(pool), load_nfl_teams_from_db(pool)
+            load_nfl_players_from_db(pool), 
+            load_nfl_teams_from_db(pool)
         )
 
+        # For each event, fetch bets concurrently
+        api_url = os.environ["NFL_ANALYSIS_API_URL"]
+        tasks = []
         for event in events:
-            game_results = await fetch_game_bets(client, event, nfl_players, nfl_teams)
+            tasks.append(fetch_game_bets(client, event, nfl_players, nfl_teams, pool, api_url))
 
-            for bet in game_results:
-                logger.info(f"Bet generated: {bet}")
-                await save_bet(pool, bet)
-
-
-async def save_bet(pool: DBPool, bet: Dict[str, Any]):
-    query = """
-        INSERT INTO nfl_daily_bets (player_id, team_code, stat, line, opponent, created_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
-    """
-    async with pool.acquire() as conn:
-        await conn.execute(
-            query,
-            bet["player_id"],
-            bet["team_code"],
-            bet["stat"],
-            bet["line"],
-            bet["opponent"],
-        )
+        # Gather all event-level tasks in parallel if desired
+        await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info("NFL analysis complete.")
