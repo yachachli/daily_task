@@ -26,9 +26,30 @@ async def batch_calls(
     func: t.Callable[..., t.Awaitable[R]],
     batch_size: int,
 ) -> list[R | Exception]:
-    """Takes an `Iterable` (like a list) and a function `func` that takes the item of the iterable as an arguemnt, batches the calls, and returns the results.
+    """Takes an `Iterable` of tuples (like a list of tuples) and a function `func` that takes the items of the tuple of the iterable as arguemnts, batches the calls, and returns the results.
 
     Any exceptions raised in the function will be returned as values.
+
+
+    ```py
+    lst = [(1, "a"), (2, "b")]
+
+    async def func(num: int, letter: str):
+        print(num, letter)
+
+    batch_calls(lst, func, 2)
+
+    ```
+
+
+    ```py
+    lst2 = [(1,), (2,), (3,), (4,)]
+
+    async def func(num: int):
+        print(num * 2)
+
+    batch_calls(lst2, func, 2)
+    ```
     """
     results: list[R | Exception] = []
     for chunk in batched(datas, batch_size):

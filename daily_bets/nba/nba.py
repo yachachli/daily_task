@@ -28,11 +28,38 @@ T = t.TypeVar("T")
 R = t.TypeVar("R")
 
 
+MARKET_TO_STAT = {
+    "player_assists": "assists",
+    "player_assists_alternate": "assists",
+    "player_points": "points",
+    "player_points_alternate": "points",
+    "player_points_assists": "points + assists",
+    "player_points_assists_alternate": "points + assists",
+    "player_rebounds": "rebounds",
+    "player_rebounds_alternate": "rebounds",
+    "player_points_rebounds": "points + rebounds",
+    "player_points_rebounds_alternate": "points + rebounds",
+    "player_points_rebounds_assists": "points + rebounds + assists",
+    "player_points_rebounds_assists_alternate": "points + rebounds + assists",
+    "player_rebounds_assists": "rebounds + assists",
+    "player_rebounds_assists_alternate": "rebounds + assists",
+    "player_threes": "threes",
+    "player_threes_alternate": "threes",
+    "player_blocks": "blocks",
+    "player_blocks_alternate": "blocks",
+    "player_steals_alternate": "steals",
+    "player_steals": "steals",
+    "player_turnovers": "turnovers",
+    "player_turnovers_alternate": "turnovers",
+}
+
+
 async def analyze_bet(
     client: httpx.AsyncClient,
     outcome: Outcome,
     home_team_abv: str,
     away_team_abv: str,
+    stat_type: str,
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
     analysis_cache: dict[tuple[str, float, float], BetAnalysis],
@@ -76,7 +103,7 @@ async def analyze_bet(
     request_json: dict[str, t.Any] = {
         "player_id": player.id,
         "team_code": player_team_abv,
-        "stat": "points",
+        "stat": stat_type,
         "line": line,
         "opponent": opponent_abv,
         "over_under": over_under.lower(),
@@ -126,7 +153,7 @@ async def fetch_game_bets(
     odds_params = {
         "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
-        "markets": "player_points",
+        "markets": ",".join(MARKET_TO_STAT.keys()),
         "oddsFormat": "decimal",
     }
 
@@ -142,12 +169,13 @@ async def fetch_game_bets(
     # desc, price, point
     analysis_cache: dict[tuple[str, float, float], BetAnalysis] = {}
 
-    def analyze_bet_inner(outcome: Outcome):
+    def analyze_bet_inner(outcome: Outcome, stat: str):
         return analyze_bet(
             client,
             outcome,
             home_team_abv,
             away_team_abv,
+            stat,
             nba_player_dict,
             nba_teams_dict,
             analysis_cache,
@@ -155,16 +183,17 @@ async def fetch_game_bets(
 
     async with httpx.AsyncClient(timeout=30) as client:
         for bookmaker in game.bookmakers:
-            markets = bookmaker.markets
-            for market in markets:
+            for market in bookmaker.markets:
                 logger.info(f"{market=}")
-                if market.key != "player_points":
+                stat_type = MARKET_TO_STAT.get(market.key)
+                if stat_type is None:
+                    logger.warning(f"Unknown market key {market.key=}")
                     continue
                 outcomes = market.outcomes
 
                 backend_results.extend(
                     await batch_calls(
-                        outcomes,
+                        map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
                         10,
                     )
