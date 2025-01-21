@@ -1,6 +1,6 @@
 import asyncio
 
-from daily_bets import nba
+from daily_bets.nba import nba
 from daily_bets.db import db_pool
 from daily_bets.logger import setup_logging, logger
 
