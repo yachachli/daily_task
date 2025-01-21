@@ -55,7 +55,7 @@ async def batch_calls(
     for chunk in batched(datas, batch_size):
         results.extend(
             await asyncio.gather(
-                *(func(params) for params in chunk), return_exceptions=True
+                *(func(*params) for params in chunk), return_exceptions=True
             )  # type: ignore Wants BaseException but doesn't work with Exception for some reason
         )
     return results
