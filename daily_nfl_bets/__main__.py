@@ -1,5 +1,5 @@
 import asyncio
-from daily_nfl_bets import nfl
+from daily_nfl_bets.nfl import nfl
 from daily_nfl_bets.db import db_pool
 from daily_nfl_bets.logger import setup_logging, logger
 
