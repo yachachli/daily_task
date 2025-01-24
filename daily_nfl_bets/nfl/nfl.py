@@ -16,10 +16,10 @@ from daily_nfl_bets.nfl.models import (
     NflTeam,
     BetAnalysis,
     bet_analysis_from_json,
-    # If you have a separate bet_analysis_to_tuple, you can remove it or adapt it.
 )
 
-# For mapping keys -> "stat" strings:
+
+# For mapping keys -> "stat" strings
 MARKET_TO_STAT = {
     "player_field_goals": "field goals",
     "player_kicking_points": "kicking points",
@@ -57,8 +57,8 @@ async def load_nfl_players_from_db(pool: DBPool) -> dict[str, NflPlayer]:
     """
     query = """
         SELECT 
-            id AS id,         -- This is the primary key from your table
-            team_id,          -- Possibly the 'code' or some ID for the player's team
+            id AS id,         -- primary key
+            team_id,          -- references v3_nfl_teams.id
             name
         FROM v3_nfl_players
     """
@@ -69,9 +69,8 @@ async def load_nfl_players_from_db(pool: DBPool) -> dict[str, NflPlayer]:
     for row in rows:
         normalized = row["name"].strip().lower()
         players[normalized] = NflPlayer(
-            # db_id=str(row["id"]),   # or just row["id"] if you prefer
-            id=str(row["id"]),      # whichever ID you want to pass to the API
-            team_id=str(row["team_id"]),
+            id=str(row["id"]),      
+            team_id=str(row["team_id"]),  # numeric ID in string form
             name=row["name"],
         )
     return players
@@ -79,8 +78,8 @@ async def load_nfl_players_from_db(pool: DBPool) -> dict[str, NflPlayer]:
 
 async def load_nfl_teams_from_db(pool: DBPool) -> dict[str, NflTeam]:
     """
-    Returns a dict mapping team_id -> NflTeam
-    from your v3_nfl_teams table.
+    Returns a dict mapping team_id (string) -> NflTeam,
+    from v3_nfl_teams, where 'id' is numeric primary key.
     """
     query = """
         SELECT 
@@ -94,7 +93,7 @@ async def load_nfl_teams_from_db(pool: DBPool) -> dict[str, NflTeam]:
 
     teams: dict[str, NflTeam] = {}
     for row in rows:
-        t_id = str(row["id"])
+        t_id = str(row["id"])  # store as string for easy lookup
         teams[t_id] = NflTeam(
             id=t_id,
             name=row["name"],
@@ -131,17 +130,34 @@ async def analyze_bet(
     stat_type: str,
     line_val: float,
     over_under: str,
+    nfl_teams_dict: dict[str, NflTeam],
 ) -> BetAnalysis:
     """
     Calls your NFL analysis backend with the prepared request
     and returns a BetAnalysis object.
-    """
-    # Decide which team_code is opponent
-    opponent_code = away_code if player.team_id == home_code else home_code
 
+    We do a robust lookup of the player's actual code via `nfl_teams_dict[player.team_id]`.
+    Then compare that to home_code / away_code to pick the right opponent.
+    """
+    # 1) Lookup the player's actual team code
+    if player.team_id not in nfl_teams_dict:
+        msg = f"Team ID={player.team_id} for player {player.name} not found in DB!"
+        logger.warning(msg)
+        raise ValueError(msg)
+
+    player_team = nfl_teams_dict[player.team_id]
+    player_team_code = player_team.code  # e.g. "BUF" or "KC"
+
+    # 2) Determine the opponent code:
+    if player_team_code == home_code:
+        opponent_code = away_code
+    else:
+        opponent_code = home_code
+
+    # 3) Build request JSON
     request_json = {
-        "player_id": player.id,    # Might be your 'player_id'
-        "team_code": player.team_id,  
+        "player_id": player.id,    # the player's primary key
+        "team_code": player_team_code,  
         "stat": stat_type,
         "line": line_val,
         "opponent": opponent_code,
@@ -171,19 +187,17 @@ async def fetch_game_bets(
 ) -> list[t.Union[BetAnalysis, Exception]]:
     """
     Fetch single-game odds from The Odds API,
-    then analyze each player's bet with your NFL backend in batches of 10.
+    then analyze each player's bet with your NFL backend.
     """
-    logger.info(
-        f"[{i}] {event.sport_key} | {event.away_team} @ {event.home_team} | {event.commence_time} | {event.id}"
-    )
+    logger.info(f"[{i}] {event.sport_key} | {event.away_team} @ {event.home_team} | {event.commence_time} | {event.id}")
 
-    # Find home_code & away_code by matching event.home_team/event.away_team
+    # We find the home_code & away_code by matching the event's home_team/away_team
+    # to v3_nfl_teams.name (ignoring case).
     home_code = None
     away_code = None
 
-    # This is naive: we search v3_nfl_teams by name ignoring case
-    # If your table stores "Philadelphia Eagles" in the name col, it will match
-    for t_id, team in nfl_teams_dict.items():
+    # Walk through all known teams, see if we can match the event's home_team/away_team
+    for team_id, team in nfl_teams_dict.items():
         if team.name.lower() == event.home_team.lower():
             home_code = team.code
         if team.name.lower() == event.away_team.lower():
@@ -195,7 +209,7 @@ async def fetch_game_bets(
         )
         return []
 
-    # Fetch single-event odds:
+    # Now fetch single-event odds
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
     odds_params = {
         "apiKey": os.environ["API_KEY"],
@@ -212,10 +226,9 @@ async def fetch_game_bets(
         logger.warning(f"No bookmakers found for event {event.id}")
         return []
 
-    # We'll store the tasks input for batch_calls
     tasks_input: list[tuple[str, float, float, str, str]] = []
 
-    # We'll define a closure that references home_code, away_code, etc.
+    # We'll define a closure that references `home_code`, `away_code`, `nfl_teams_dict`
     async def analyze_outcome(
         player_name_raw: str,
         line_val: float,
@@ -223,13 +236,17 @@ async def fetch_game_bets(
         over_under_str: str,
         stat_type_str: str
     ) -> BetAnalysis:
+        """
+        Called by batch_calls for each outcome
+        """
         normalized_name = player_name_raw.lower()
-        player = nfl_player_dict.get(normalized_name)
-        if not player:
+        if normalized_name not in nfl_player_dict:
             msg = f"Player not found in DB: {player_name_raw}"
             logger.warning(msg)
             raise ValueError(msg)
+        player = nfl_player_dict[normalized_name]
 
+        # Now analyze the bet, with robust team/opponent logic
         return await analyze_bet(
             client,
             player,
@@ -238,9 +255,10 @@ async def fetch_game_bets(
             stat_type_str,
             line_val,
             over_under_str,
+            nfl_teams_dict,
         )
 
-    # Extract each outcome
+    # Build tasks_input from the "bookmakers" data
     for bookmaker in game_data.get("bookmakers", []):
         for market in bookmaker.get("markets", []):
             stat_type_str = MARKET_TO_STAT.get(market["key"])
@@ -249,10 +267,11 @@ async def fetch_game_bets(
                 continue
 
             for outcome in market.get("outcomes", []):
-                player_name_raw = outcome["description"]   # ex: "Jalen Hurts"
-                line_val = outcome["point"]                # ex: 230.5
-                price_val = outcome["price"]               # ex: 1.87
-                over_under_str = outcome["name"]           # ex: "Over"
+                player_name_raw = outcome["description"]
+                line_val = outcome["point"]
+                price_val = outcome["price"]
+                over_under_str = outcome["name"]  # "Over" or "Under"
+
                 tasks_input.append(
                     (player_name_raw, line_val, price_val, over_under_str, stat_type_str)
                 )
@@ -261,19 +280,17 @@ async def fetch_game_bets(
         logger.info(f"No outcomes to analyze for event {event.id}")
         return []
 
-    # Now batch_calls with batch_size=10
-    return await batch_calls(tasks_input, analyze_outcome, batch_size=200)
+    # Now batch_calls with batch_size=10 or 200
+    return await batch_calls(tasks_input, analyze_outcome, batch_size=10)
 
 
 async def run(pool: DBPool):
     logger.info("Starting NFL analysis")
 
-    # We'll go 7 days out
     now = datetime.now(timezone.utc)
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=7) - timedelta(seconds=1)
 
-    # The odds API endpoint for NFL
     events_url = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
     params_events = {
         "apiKey": os.environ["API_KEY"],
@@ -281,15 +298,13 @@ async def run(pool: DBPool):
         "commenceTimeTo": day_end.isoformat().replace("+00:00", "Z"),
     }
 
-    # We'll fetch all events
     async with httpx.AsyncClient(timeout=30) as client:
         events = await fetch_sport(client, "americanfootball_nfl", events_url, params_events)
-
         if not events:
             logger.error(f"No events for NFL in {day_start} to {day_end}")
             return
 
-        # Load players and teams from DB
+        # Load players + teams
         nfl_player_dict, nfl_teams_dict = await asyncio.gather(
             load_nfl_players_from_db(pool),
             load_nfl_teams_from_db(pool),
@@ -297,45 +312,33 @@ async def run(pool: DBPool):
 
         all_analysis: list[t.Union[BetAnalysis, Exception]] = []
 
-        # For each event, gather results from fetch_game_bets
+        # For each event, fetch bets
         for i, event in enumerate(events, start=1):
-            results = await fetch_game_bets(
-                client, event, i, nfl_player_dict, nfl_teams_dict
-            )
+            results = await fetch_game_bets(client, event, i, nfl_player_dict, nfl_teams_dict)
             if results:
                 all_analysis.extend(results)
 
-        # Separate successes from exceptions
         successes = [r for r in all_analysis if not isinstance(r, Exception)]
         logger.info(f"Finished analyzing NFL. Good results = {len(successes)} / {len(all_analysis)} total")
 
-    # Now insert them into `nfl_daily_bets`:
-    # columns = [player_id, team_code, stat, line, opponent, bet_grade]
-    # We store the entire JSON in `bet_grade`.
-
+    # Insert them into `nfl_daily_bets`
     async with pool.acquire() as conn:
-        # 1) Build the list of records (the tuples).
         records: list[tuple[str, str, str, str, float, str]] = []
 
         for bet_obj in successes:
-            # bet_obj is a BetAnalysis
             import json
-            
-            # Convert these fields as needed:
+
+            # The player's team is from bet_obj.player_team_info
             player_id = str(bet_obj.player_team_info.team_id)
             team_code = bet_obj.player_team_info.team_code
-            opponent_code = bet_obj.defense_data.team_code
+            # Opponent code from bet_obj.defense_data (assuming you parse that)
+            opponent = bet_obj.defense_data.team_code  
             stat = bet_obj.stat_type
-            line_val = bet_obj.threshold  # or bet_obj.bet_number
-            # Full JSON in bet_grade
+            line_val = bet_obj.threshold
             bet_grade_json = json.dumps(bet_obj, default=lambda x: x.__dict__)
 
-            # Append the tuple in the order matching your columns
-            records.append(
-                (player_id, team_code, opponent_code, stat, line_val, bet_grade_json)
-            )
+            records.append((player_id, team_code, opponent, stat, line_val, bet_grade_json))
 
-        # 2) Now we have `records`, so we can call `copy_records_to_table`.
         copy_res = await conn.copy_records_to_table(
             "nfl_daily_bets",
             columns=["player_id", "team_code", "opponent", "stat", "line", "bet_grade"],
@@ -343,4 +346,3 @@ async def run(pool: DBPool):
         )
         logger.info(copy_res)
         logger.info(f"Inserted {len(records)} rows into nfl_daily_bets.")
-
