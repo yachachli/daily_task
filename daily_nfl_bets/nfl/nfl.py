@@ -247,7 +247,8 @@ async def fetch_game_bets(
         player = nfl_player_dict[normalized_name]
 
         # Now analyze the bet, with robust team/opponent logic
-        return await analyze_bet(
+
+        bet_analysis = await analyze_bet(
             client,
             player,
             home_code,
@@ -257,6 +258,8 @@ async def fetch_game_bets(
             over_under_str,
             nfl_teams_dict,
         )
+        bet_analysis.price_val = price_val
+        return bet_analysis
 
     # Build tasks_input from the "bookmakers" data
     for bookmaker in game_data.get("bookmakers", []):
@@ -281,7 +284,7 @@ async def fetch_game_bets(
         return []
 
     # Now batch_calls with batch_size=10 or 200
-    return await batch_calls(tasks_input, analyze_outcome, batch_size=10)
+    return await batch_calls(tasks_input, analyze_outcome, batch_size=50)
 
 
 async def run(pool: DBPool):
@@ -323,7 +326,7 @@ async def run(pool: DBPool):
 
     # Insert them into `nfl_daily_bets`
     async with pool.acquire() as conn:
-        records: list[tuple[str, str, str, str, float, str]] = []
+        records: list[tuple[str, str, str, str, float, float, str]] = []
 
         for bet_obj in successes:
             import json
@@ -335,13 +338,14 @@ async def run(pool: DBPool):
             opponent = bet_obj.defense_data.team_code  
             stat = bet_obj.stat_type
             line_val = bet_obj.threshold
+            price_val = getattr(bet_obj, "price_val", 0.0)  # Default to 0.0 if missing
             bet_grade_json = json.dumps(bet_obj, default=lambda x: x.__dict__)
 
-            records.append((player_id, team_code, opponent, stat, line_val, bet_grade_json))
+            records.append((player_id, team_code, opponent, stat, line_val, price_val, bet_grade_json))
 
         copy_res = await conn.copy_records_to_table(
             "nfl_daily_bets",
-            columns=["player_id", "team_code", "opponent", "stat", "line", "bet_grade"],
+            columns=["player_id", "team_code", "opponent", "stat", "line", "price", "bet_grade"],
             records=records,
         )
         logger.info(copy_res)

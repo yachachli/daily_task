@@ -175,6 +175,7 @@ class BetAnalysis:
     previous_game_stats: list[PreviousGameStats]
 
     graphs: list[Graph]
+    price_val: float
 
 #
 # Possibly a function to convert BetAnalysis -> JSON or something else
@@ -236,6 +237,7 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
         "graphs",
     }
     filtered_data = {k: v for k, v in data.items() if k not in skip_keys}
+    price_val = data.get("price_val", 0.0)  # Default to 0.0 if missing
 
     # 6) Build the BetAnalysis
     return BetAnalysis(
@@ -245,4 +247,5 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
         player_stats=player_stats,
         previous_game_stats=previous_game_stats_list,
         graphs=graphs_parsed,
+        price_val=price_val,  # <---- Pass price_val here
     )
