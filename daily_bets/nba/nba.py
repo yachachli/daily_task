@@ -74,6 +74,7 @@ async def analyze_bet(
 
     line = outcome.point
     over_under = outcome.name
+    price = outcome.price
 
     # Get the player's team abbreviation
     if player.team_id not in nba_teams_dict:
@@ -119,6 +120,7 @@ async def analyze_bet(
     response_data = r.json()
     logger.info(f"Backend success: {response_data=}")
     bet_analysis = bet_analysis_from_json(response_data)
+    bet_analysis.price_val = price
     logger.info(f"Parse backend: {bet_analysis=}")
 
     analysis_cache[bet_key] = bet_analysis
@@ -195,7 +197,7 @@ async def fetch_game_bets(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
-                        10,
+                        100,
                     )
                 )
     return backend_results, game
