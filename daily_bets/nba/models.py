@@ -142,6 +142,7 @@ class BetAnalysis:
     bet_recommendation: str
     graphs: list[Graph]
     error: bool
+    price_val: float  # <---- NEW FIELD FOR PRICE
 
 
 def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
@@ -174,18 +175,20 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
         player_data=player_data,
         opponent_stats=opponent_stats,
         graphs=graphs,
+        price_val=data.get("price_val", 0.0),  # Ensure price_val is included
     )
 
 
 def bet_analysis_to_tuple(
     bet_analysis: BetAnalysis,
-) -> tuple[int, int, int, str, float, str]:
+) -> tuple[int, int, int, str, float, float, str]:
     return (
         bet_analysis.player_data.Player_ID,
         bet_analysis.player_team_info.Team_ID,
         bet_analysis.opponent_stats.Team_ID,
         bet_analysis.stat_type,
         bet_analysis.threshold,
+        getattr(bet_analysis, "price_val", 0.0),  # price (default to 0.0 if missing)
         json_dumps_dataclass(bet_analysis),
     )
 

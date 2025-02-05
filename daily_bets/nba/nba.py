@@ -280,7 +280,8 @@ async def run(pool: DBPool):
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
-            columns=["player_id", "team_id", "opponent_id", "stat", "line", "analysis"],
+            columns=["player_id", "team_id", "opponent_id", "stat", "line", "price", "analysis"],
             records=list(map(bet_analysis_to_tuple, successes)),
         )
         logger.info(res)
+        #price
