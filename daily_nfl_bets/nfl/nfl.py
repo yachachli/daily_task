@@ -57,7 +57,8 @@ async def load_nfl_players_from_db(pool: DBPool) -> dict[str, NflPlayer]:
     """
     query = """
         SELECT 
-            id AS id,         -- primary key
+            id AS db_id,         -- primary key
+            player_id AS id   -- actual player id 
             team_id,          -- references v3_nfl_teams.id
             name
         FROM v3_nfl_players
