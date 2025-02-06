@@ -265,7 +265,7 @@ def game_from_json(game_data: dict[str, t.Any]) -> Game:
 async def load_nba_players_from_db(pool: DBPool):
     """Returns a dict mapping LOWERCASE `player_name` to `NbaPlayer`."""
     query = """
-        SELECT id as db_id, player_id as id, team_id, name, position, player_pic
+        SELECT id as db_id, player_id, team_id, name, position, player_pic
         FROM nba_players
     """
     async with pool.acquire() as conn:
@@ -275,7 +275,14 @@ async def load_nba_players_from_db(pool: DBPool):
         for row in rows:
             row = dict(row)
             normalized_name: str = row["name"].strip().lower()
-            player_dict[normalized_name] = NbaPlayer(**row)
+            player_dict[normalized_name] = NbaPlayer(
+                db_id=row["db_id"],  # Keep this if needed for DB reference
+                id=row["player_id"],  # Ensure this is the correct player_id
+                team_id=row["team_id"],
+                name=row["name"],
+                position=row["position"],
+                player_pic=row["player_pic"],
+            )
 
     return player_dict
 
