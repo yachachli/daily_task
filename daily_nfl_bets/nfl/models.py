@@ -1,8 +1,6 @@
 import typing as t
 from dataclasses import dataclass
 
-# If your code uses this for JSON dumping
-from daily_bets.utils import json_dumps_dataclass  
 
 #
 # Basic event/player/team classes
@@ -16,17 +14,20 @@ class SportEvent:
     home_team: str
     away_team: str
 
+
 @dataclass
 class NflPlayer:
-    id: str  # DB primary key or something
+    player_id: int
     team_id: str
     name: str
 
+
 @dataclass
 class NflTeam:
-    id: str
+    id: int
     name: str
     code: str
+
 
 #
 # The new dataclasses for NFL fields
@@ -37,6 +38,7 @@ class PlayerTeamInfo:
     team_name: str
     team_code: str
 
+
 @dataclass
 class DefenseData:
     """
@@ -44,6 +46,7 @@ class DefenseData:
     For example, "id": 894, "name": "Kansas City Chiefs", etc.
     Add or remove fields as needed.
     """
+
     id: int
     name: str
     team_code: str
@@ -85,12 +88,14 @@ class DefenseData:
     avg_points_against: float
     avg_total_tackles: float
 
+
 @dataclass
 class PlayerStats:
     """
     Matches the "player_stats" object from your JSON.
     e.g. "avg_pass_int": 0.0, "avg_rec_tds": 0.1, etc.
     """
+
     avg_pass_int: float
     avg_pass_tds: float
     avg_pass_yards: float
@@ -111,12 +116,14 @@ class PlayerStats:
     avg_passrecrush_tds: float
     avg_passrush_yds: float
 
+
 @dataclass
 class PreviousGameStats:
     """
     Each element in "previous_game_stats" array,
     e.g. {"date": "2025-01-19", "home_team": "BUF", "away_team": "BAL", "pass_yds": 0.0, ...}
     """
+
     date: str
     home_team: str
     away_team: str
@@ -133,6 +140,7 @@ class PreviousGameStats:
     opponent_interceptions: float
     after_injury: bool
 
+
 #
 # Graph structures
 #
@@ -141,12 +149,14 @@ class GraphData:
     label: str
     value: float
 
+
 @dataclass
 class Graph:
     version: int
     data: list[GraphData]
     title: str
     threshold: float
+
 
 #
 # The main BetAnalysis class
@@ -177,13 +187,14 @@ class BetAnalysis:
     graphs: list[Graph]
     price_val: float
 
+
 #
 # Possibly a function to convert BetAnalysis -> JSON or something else
 #
 
 # def json_dumps_bet_analysis(bet: BetAnalysis) -> str:
 #     """
-#     Example: Convert entire BetAnalysis to JSON. 
+#     Example: Convert entire BetAnalysis to JSON.
 #     Alternatively, use your existing `json_dumps_dataclass`.
 #     """
 #     return json_dumps_dataclass(bet)
@@ -204,11 +215,15 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
     )
 
     # 2) defense_data
-    defense_raw = data["defense_data"]  # e.g. { "id": 894, "name": "Kansas City Chiefs", ... }
+    defense_raw = data[
+        "defense_data"
+    ]  # e.g. { "id": 894, "name": "Kansas City Chiefs", ... }
     defense_data = DefenseData(**defense_raw)
 
     # 3) player_stats
-    stats_raw = data["player_stats"]  # e.g. { "avg_pass_int": 0.0, "avg_rec_tds": 0.1, ... }
+    stats_raw = data[
+        "player_stats"
+    ]  # e.g. { "avg_pass_int": 0.0, "avg_rec_tds": 0.1, ... }
     player_stats = PlayerStats(**stats_raw)
 
     # 4) previous_game_stats (array of objects)

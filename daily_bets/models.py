@@ -1,14 +1,10 @@
-import json
 import typing as t
-from dataclasses import dataclass
 
 from pydantic import BaseModel
+from asyncpg import Pool
 
-from daily_bets.db import DBPool
 
-
-@dataclass
-class SportEvent:
+class SportEvent(BaseModel):
     id: str
     sport_key: str
     sport_title: str
@@ -60,8 +56,7 @@ class BetAnalysis(BaseModel):
     graphs: list[GraphV1]
 
 
-@dataclass
-class Outcome:
+class Outcome(BaseModel):
     name: str
     """Over or under"""
     description: str
@@ -72,22 +67,19 @@ class Outcome:
     """Stat Line"""
 
 
-@dataclass
-class Market:
+class Market(BaseModel):
     key: str
     last_update: str
     outcomes: list[Outcome]
 
 
-@dataclass
-class Bookmaker:
+class Bookmaker(BaseModel):
     key: str
     title: str
     markets: list[Market]
 
 
-@dataclass
-class Game:
+class Game(BaseModel):
     id: str
     sport_key: str
     sport_title: str
@@ -133,39 +125,7 @@ class NbaTeam(BaseModel):
     def_rtg: float
 
 
-def game_from_json(game_data: dict[str, t.Any]) -> Game:
-    """Converts json into an `Outcome`."""
-
-    # Convert the bookmakers section to Bookmaker instances
-    bookmakers = [
-        Bookmaker(
-            key=bookmaker["key"],
-            title=bookmaker["title"],
-            markets=[
-                Market(
-                    key=market["key"],
-                    last_update=market["last_update"],
-                    outcomes=[Outcome(**outcome) for outcome in market["outcomes"]],
-                )
-                for market in bookmaker["markets"]
-            ],
-        )
-        for bookmaker in game_data["bookmakers"]
-    ]
-
-    # Create and return the Game dataclass
-    return Game(
-        id=game_data["id"],
-        sport_key=game_data["sport_key"],
-        sport_title=game_data["sport_title"],
-        commence_time=game_data["commence_time"],
-        home_team=game_data["home_team"],
-        away_team=game_data["away_team"],
-        bookmakers=bookmakers,
-    )
-
-
-async def load_nba_players_from_db(pool: DBPool):
+async def load_nba_players_from_db(pool: Pool):
     """Returns a dict mapping LOWERCASE `player_name` to `NbaPlayer`."""
     query = """
         SELECT *
@@ -178,15 +138,12 @@ async def load_nba_players_from_db(pool: DBPool):
         for row in rows:
             row = dict(row)
             normalized_name: str = row["name"].strip().lower()
-            if isinstance(row["injury"], str):
-                row["injury"] = json.loads(row["injury"])
-
             player_dict[normalized_name] = NbaPlayer.model_validate(row)
 
     return player_dict
 
 
-async def load_nba_teams_from_db(pool: DBPool):
+async def load_nba_teams_from_db(pool: Pool):
     """Returns a dict mapping `team_id` to `NbaTeam`."""
     query = """
         SELECT *
@@ -204,7 +161,7 @@ async def load_nba_teams_from_db(pool: DBPool):
     return teams_dict
 
 
-def build_team_fullname_map(teams_dict: dict[str, NbaTeam]):
+def build_nba_team_fullname_map(teams_dict: dict[str, NbaTeam]):
     """Returns a dict mapping full name (city + ' ' + name) in lowercase to the team's abbreviation.
 
     For example, 'charlotte hornets' -> 'CHA'.
@@ -214,3 +171,38 @@ def build_team_fullname_map(teams_dict: dict[str, NbaTeam]):
         full_team_str = f"{team.team_city} {team.name}".strip().lower()
         full_map[full_team_str] = team.team_abv
     return full_map
+
+
+class NflPlayer(BaseModel):
+    id: int
+    team_id: int
+    name: str
+    height: str
+    position: str
+    injuries: Injury
+
+
+class NflTeam(BaseModel):
+    id: int
+    name: str
+    team_code: str
+    wins: int
+    losses: int
+    ties: int
+    points_for: int
+    points_against: int
+    total_tackles: int
+    fumbles_lost: int
+    defensive_touchdowns: int
+    fumbles_recovered: int
+    solo_tackles: int
+    defensive_interceptions: int
+    qb_hits: int
+    tackles_for_loss: int
+    pass_deflections: int
+    sacks: int
+    fumbles: int
+    passing_td_allowed: int
+    passing_yards_allowed: int
+    rushing_yards_allowed: int
+    rushing_td_allowed: int | None

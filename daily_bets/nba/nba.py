@@ -1,14 +1,15 @@
 import asyncio
+import json
 import os
 import typing as t
 from datetime import datetime, timedelta, timezone
 
+from asyncpg import Pool
 import httpx
 from httpx._types import QueryParamTypes
 
-from daily_bets.db import DBPool
 from daily_bets.logger import logger
-from daily_bets.nba.models import (
+from daily_bets.models import (
     BetAnalysis,
     BetAnalysisInput,
     Game,
@@ -16,8 +17,7 @@ from daily_bets.nba.models import (
     NbaTeam,
     Outcome,
     SportEvent,
-    build_team_fullname_map,
-    game_from_json,
+    build_nba_team_fullname_map,
     load_nba_players_from_db,
     load_nba_teams_from_db,
 )
@@ -28,28 +28,28 @@ R = t.TypeVar("R")
 
 
 MARKET_TO_STAT = {
-    "player_assists": "assists",
-    "player_assists_alternate": "assists",
+    # "player_assists": "assists",
+    # "player_assists_alternate": "assists",
     "player_points": "points",
-    "player_points_alternate": "points",
-    "player_points_assists": "points + assists",
-    "player_points_assists_alternate": "points + assists",
-    "player_rebounds": "rebounds",
-    "player_rebounds_alternate": "rebounds",
-    "player_points_rebounds": "points + rebounds",
-    "player_points_rebounds_alternate": "points + rebounds",
-    "player_points_rebounds_assists": "points + rebounds + assists",
-    "player_points_rebounds_assists_alternate": "points + rebounds + assists",
-    "player_rebounds_assists": "rebounds + assists",
-    "player_rebounds_assists_alternate": "rebounds + assists",
-    "player_threes": "threes",
-    "player_threes_alternate": "threes",
-    "player_blocks": "blocks",
-    "player_blocks_alternate": "blocks",
-    "player_steals_alternate": "steals",
-    "player_steals": "steals",
-    "player_turnovers": "turnovers",
-    "player_turnovers_alternate": "turnovers",
+    # "player_points_alternate": "points",
+    # "player_points_assists": "points + assists",
+    # "player_points_assists_alternate": "points + assists",
+    # "player_rebounds": "rebounds",
+    # "player_rebounds_alternate": "rebounds",
+    # "player_points_rebounds": "points + rebounds",
+    # "player_points_rebounds_alternate": "points + rebounds",
+    # "player_points_rebounds_assists": "points + rebounds + assists",
+    # "player_points_rebounds_assists_alternate": "points + rebounds + assists",
+    # "player_rebounds_assists": "rebounds + assists",
+    # "player_rebounds_assists_alternate": "rebounds + assists",
+    # "player_threes": "threes",
+    # "player_threes_alternate": "threes",
+    # "player_blocks": "blocks",
+    # "player_blocks_alternate": "blocks",
+    # "player_steals_alternate": "steals",
+    # "player_steals": "steals",
+    # "player_turnovers": "turnovers",
+    # "player_turnovers_alternate": "turnovers",
 }
 
 
@@ -72,7 +72,6 @@ async def analyze_bet(
         raise ValueError(f"Player not found in DB: {player=}")
 
     line = outcome.point
-    over_under = outcome.name
     price = outcome.price
 
     # Get the player's team abbreviation
@@ -83,9 +82,10 @@ async def analyze_bet(
         raise ValueError(f"Team not found in DB: {player.team_id=}")
 
     bet_key = (outcome.description, outcome.price, outcome.point)
-    if (existing := analysis_cache.get(bet_key)) is not None:
+    if (analysis_cache.get(bet_key)) is not None:
         logger.info(f"Found existing bet with key {bet_key=}. Skipping analysis")
-        return existing
+        return None
+        # return existing
 
     team_abv = player_team_abv = nba_teams_dict[player.team_id].team_abv
     if team_abv == home_team_abv:
@@ -161,12 +161,12 @@ async def fetch_game_bets(
     resp_odds.raise_for_status()
     odds_data = resp_odds.json()
 
-    game = game_from_json(odds_data)
+    game = Game.model_validate(odds_data)
     logger.info(f"{game=}")
 
-    backend_results: list[tuple[BetAnalysis, float] | Exception] = []
+    backend_results: list[tuple[BetAnalysis, float] | None | Exception] = []
 
-    # desc, price, point
+    # desc, price, stat
     analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]] = {}
 
     def analyze_bet_inner(outcome: Outcome, stat: str):
@@ -198,7 +198,11 @@ async def fetch_game_bets(
                         100,
                     )
                 )
-    return backend_results, game
+    results_filtered: list[tuple[BetAnalysis, float] | Exception] = list(
+        filter(lambda x: x is not None, backend_results)
+    )  # type: ignore
+    logger.warning(f"Filtered {len(backend_results)} -> {len(results_filtered)}")
+    return results_filtered, game
 
 
 async def fetch_sport(
@@ -217,7 +221,7 @@ async def fetch_sport(
     return events_list
 
 
-async def run(pool: DBPool):
+async def run(pool: Pool):
     logger.info("Starting NBA analysis")
     sport = "basketball_nba"
     # "americanfootball_nfl"
@@ -249,7 +253,7 @@ async def run(pool: DBPool):
     nba_player_dict, nba_teams_dict = await asyncio.gather(
         load_nba_players_from_db(pool), load_nba_teams_from_db(pool)
     )
-    team_fullname_map = build_team_fullname_map(nba_teams_dict)
+    team_fullname_map = build_nba_team_fullname_map(nba_teams_dict)
 
     all_games: list[Game] = []
     backend_results: list[tuple[BetAnalysis, float] | Exception] = []
@@ -292,4 +296,3 @@ async def run(pool: DBPool):
             ),
         )
         logger.info(res)
-        # price
