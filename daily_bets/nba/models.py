@@ -175,7 +175,7 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
         player_data=player_data,
         opponent_stats=opponent_stats,
         graphs=graphs,
-        price_val=data.get("price_val", 0.0),  # Ensure price_val is included
+        price_val=data.get("price_val", 1.73),  # defual to 1.73
     )
 
 
