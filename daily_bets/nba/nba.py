@@ -122,6 +122,7 @@ async def analyze_bet(
     bet_analysis = bet_analysis_from_json(response_data)
     bet_analysis.price_val = price
     logger.info(f"Parse backend: {bet_analysis=}")
+    
 
     analysis_cache[bet_key] = bet_analysis
     return bet_analysis
@@ -197,7 +198,7 @@ async def fetch_game_bets(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
-                        100,
+                        10,
                     )
                 )
     return backend_results, game
