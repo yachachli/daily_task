@@ -63,7 +63,11 @@ async def analyze_bet(
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
     analysis_cache: dict[tuple[str, float, float], BetAnalysis],
+    seen_bets: t.Optional[dict[tuple[str, str, float], BetAnalysis]] = None,
 ):
+    if seen_bets is None:
+        seen_bets = {}
+        
     player_name_raw = outcome.description
     normalized_name = player_name_raw.lower()
 
@@ -87,6 +91,18 @@ async def analyze_bet(
     if (existing := analysis_cache.get(bet_key)) is not None:
         logger.info(f"Found existing bet with key {bet_key=}. Skipping analysis")
         return existing
+
+    # Create a key for detecting duplicates (player name, stat type, line)
+    duplicate_key = (player_name_raw, stat_type, line)
+    
+    is_duplicate = False
+    # Check if we've seen this bet before with opposite over/under
+    if duplicate_key in seen_bets:
+        previous_bet = seen_bets[duplicate_key]
+        if previous_bet.over_under.lower() != over_under.lower():
+            # This is a duplicate with the opposite over/under
+            logger.info(f"Found duplicate bet for {player_name_raw} {stat_type} {line} (opposite over/under)")
+            is_duplicate = True
 
     team_abv = player_team_abv = nba_teams_dict[player.team_id].abv
     if team_abv == home_team_abv:
@@ -121,10 +137,15 @@ async def analyze_bet(
     logger.info(f"Backend success: {response_data=}")
     bet_analysis = bet_analysis_from_json(response_data)
     bet_analysis.price_val = price
+    bet_analysis.is_duplicate = is_duplicate  # Set the duplicate flag
     logger.info(f"Parse backend: {bet_analysis=}")
     
-
     analysis_cache[bet_key] = bet_analysis
+    
+    # Store this bet in seen_bets to check for duplicates later
+    if not is_duplicate:
+        seen_bets[duplicate_key] = bet_analysis
+        
     return bet_analysis
 
 
@@ -283,7 +304,7 @@ async def run(pool: DBPool):
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
-            columns=["player_id", "team_id", "opponent_id", "stat", "line", "price", "analysis"],
+            columns=["player_id", "team_id", "opponent_id", "stat", "line", "price", "analysis", "is_duplicate"],
             records=list(map(bet_analysis_to_tuple, successes)),
         )
         logger.info(res)
