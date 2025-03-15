@@ -62,12 +62,8 @@ async def analyze_bet(
     stat_type: str,
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
-    analysis_cache: dict[tuple[str, float, float], BetAnalysis], # map of three things in the analsys 
-    seen_bets: t.Optional[dict[tuple[str, str, float], BetAnalysis]] = None,
+    analysis_cache: dict[tuple[str, float, float], BetAnalysis],
 ):
-    if seen_bets is None:
-        seen_bets = {}
-        
     player_name_raw = outcome.description
     normalized_name = player_name_raw.lower()
 
@@ -88,22 +84,9 @@ async def analyze_bet(
         raise ValueError(f"Team not found in DB: {player.team_id=}")
 
     bet_key = (outcome.description, outcome.price, outcome.point)
-    if bet_key in analysis_cache: # means it already exists
-        logger.info(f"Found existing bet with key {bet_key=}. Skipping analysis")
-        # return existing #instead of returning existing one, don't return anything, maybe return None
+    if bet_key in analysis_cache:
+        logger.debug(f"Found existing bet with key {bet_key=}. Skipping analysis")
         return None
-
-    # Create a key for detecting duplicates (player name, stat type, line)
-    duplicate_key = (player_name_raw, stat_type, line)
-    
-    is_duplicate = False
-    # Check if we've seen this bet before with opposite over/under
-    if duplicate_key in seen_bets:
-        previous_bet = seen_bets[duplicate_key]
-        if previous_bet.over_under.lower() != over_under.lower():
-            # This is a duplicate with the opposite over/under
-            logger.info(f"Found duplicate bet for {player_name_raw} {stat_type} {line} (opposite over/under)")
-            is_duplicate = True
 
     team_abv = player_team_abv = nba_teams_dict[player.team_id].abv
     if team_abv == home_team_abv:
@@ -129,9 +112,9 @@ async def analyze_bet(
 
     logger.info(f"Calling backend for {player_name_raw}: {request_json}")
 
-    apiUrl = os.environ["NBA_ANALYSIS_API_URL"]
+    api_url = os.environ["NBA_ANALYSIS_API_URL"]
     headers = {"Content-Type": "application/json"}
-    r = await client.post(apiUrl, json=request_json, headers=headers)
+    r = await client.post(api_url, json=request_json, headers=headers)
     r.raise_for_status()
 
     response_data = r.json()
@@ -139,18 +122,14 @@ async def analyze_bet(
     logger.info(f"Backend success: {response_data=}")
     bet_analysis = bet_analysis_from_json(response_data)
     bet_analysis.price_val = price
-    bet_analysis.is_duplicate = is_duplicate  # Set the duplicate flag
     logger.info(f"Parse backend: {bet_analysis=}")
 
+    # if the analysis doesn't match, then we don't want users to be able to see the bet
     if outcome.name != bet_analysis.over_under:
-        return None # we want it to not go into db pretty much
-    
+        return None
+
     analysis_cache[bet_key] = bet_analysis
-    
-    # Store this bet in seen_bets to check for duplicates later
-    if not is_duplicate:
-        seen_bets[duplicate_key] = bet_analysis
-        
+
     return bet_analysis
 
 
@@ -162,9 +141,9 @@ async def fetch_game_bets(
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
 ):
-    logger.info(f"Fetching bets for {event=} {i=}")
+    logger.debug(f"Fetching bets for {event=} {i=}")
 
-    logger.info(
+    logger.debug(
         f"{i}. {event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event_id={event.id}"
     )
 
@@ -178,7 +157,6 @@ async def fetch_game_bets(
     home_team_abv = team_fullname_map.get(event.home_team.lower(), "???")
 
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
-    logger.info("{single_odds_url=}")
     odds_params = {
         "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
@@ -191,7 +169,7 @@ async def fetch_game_bets(
     odds_data = resp_odds.json()
 
     game = game_from_json(odds_data)
-    logger.info(f"{game=}")
+    logger.debug(f"{game=}")
 
     backend_results: list[BetAnalysis | Exception | None] = []
 
@@ -228,9 +206,13 @@ async def fetch_game_bets(
                     )
                 )
 
-    backend_results_filtered: list[BetAnalysis | Exception] = list(filter(lambda x: x is not None, backend_results)) #type: ignore
+    backend_results_filtered: list[BetAnalysis | Exception] = list(
+        filter(lambda x: x is not None, backend_results)
+    )  # type: ignore
     # ^ getting all of the 'none' bets out (ones that don't match analysis from odds-api)
+    logger.info(f"Filtered {len(backend_results)} -> {len(backend_results_filtered)}")
     return backend_results_filtered, game
+
 
 async def fetch_sport(
     client: httpx.AsyncClient, sport: str, url: str, params: QueryParamTypes
@@ -311,29 +293,15 @@ async def run(pool: DBPool):
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
-            columns=["player_id", "team_id", "opponent_id", "stat", "line", "price", "analysis", "is_duplicate"],
+            columns=[
+                "player_id",
+                "team_id",
+                "opponent_id",
+                "stat",
+                "line",
+                "price",
+                "analysis",
+            ],
             records=list(map(bet_analysis_to_tuple, successes)),
         )
         logger.info(res)
-        #price
-
-#issue: 
-# when odds api gets a bet, there is usually the same exact bet, one over & one under
-# we don't want to call our backend twice (extra unnecessary costs)
-# and sometimes odds-api only has one option - we don't want to tell a user they can bet the other
-
-
-
-
-
-## how I want seen bets to work:
-# check if bet is a duplicate (player, stat, line)
-# if it is, check if the over/under is the opposite of the previous bet
-# if it is, set is_duplicate to true & remove one of the bets from Neon (don't need to analyze both)
-
-# if it is not, set is_duplicate to false
-# check if our analysis (over/under) is the same as the option from the odds-api (over/under)
-# if it is not, delete the bet from Neon
-
-# if it is not a duplicate, add it to seen_bets but not sure I need seen_bets for this
-# if it is a duplicate, do nothing

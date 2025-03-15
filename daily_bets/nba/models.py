@@ -143,7 +143,6 @@ class BetAnalysis:
     graphs: list[Graph]
     error: bool
     price_val: float
-    is_duplicate: bool = False
 
 
 def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
@@ -182,7 +181,7 @@ def bet_analysis_from_json(data: dict[str, t.Any]) -> BetAnalysis:
 
 def bet_analysis_to_tuple(
     bet_analysis: BetAnalysis,
-) -> tuple[int, int, int, str, float, float, str, bool]:
+) -> tuple[int, int, int, str, float, float, str]:
     return (
         bet_analysis.player_data.Player_ID,
         bet_analysis.player_team_info.Team_ID,
@@ -191,7 +190,6 @@ def bet_analysis_to_tuple(
         bet_analysis.threshold,
         getattr(bet_analysis, "price_val", 0.0),
         json_dumps_dataclass(bet_analysis),
-        bet_analysis.is_duplicate,
     )
 
 

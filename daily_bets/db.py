@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from daily_bets.logger import logger
 
 if TYPE_CHECKING:
-    DBPool = asyncpg.Pool[asyncpg.Record]
+    type DBPool = asyncpg.Pool[asyncpg.Record]
 else:
     DBPool = asyncpg.Pool
 
