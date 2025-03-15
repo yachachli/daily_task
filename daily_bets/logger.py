@@ -1,6 +1,7 @@
 import json
 import logging
 import logging.config
+import os
 import pathlib
 
 
@@ -12,6 +13,8 @@ def setup_logging():
     logging.config.dictConfig(config)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    os.makedirs("./logs", exist_ok=True)
 
 
 logger = logging.getLogger("app")
