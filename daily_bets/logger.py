@@ -10,11 +10,11 @@ def setup_logging():
     with open(config_path) as f:
         config = json.load(f)
 
+    os.makedirs("./logs", exist_ok=True)
+
     logging.config.dictConfig(config)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-
-    os.makedirs("./logs", exist_ok=True)
 
 
 logger = logging.getLogger("app")
