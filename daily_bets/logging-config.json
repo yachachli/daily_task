@@ -11,7 +11,8 @@
         "stdout": {
             "class": "logging.StreamHandler",
             "formatter": "simple",
-            "stream": "ext://sys.stdout"
+            "stream": "ext://sys.stdout",
+            "level": "WARNING"
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",

@@ -3,22 +3,20 @@ import os
 import typing as t
 from datetime import datetime, timedelta, timezone
 
+from asyncpg import Pool
 import httpx
 from httpx._types import QueryParamTypes
 
-from daily_bets.db import DBPool
 from daily_bets.logger import logger
-from daily_bets.nba.models import (
+from daily_bets.models import (
     BetAnalysis,
+    BetAnalysisInput,
     Game,
     NbaPlayer,
     NbaTeam,
     Outcome,
     SportEvent,
-    bet_analysis_from_json,
-    bet_analysis_to_tuple,
-    build_team_fullname_map,
-    game_from_json,
+    build_nba_team_fullname_map,
     load_nba_players_from_db,
     load_nba_teams_from_db,
 )
@@ -62,7 +60,7 @@ async def analyze_bet(
     stat_type: str,
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
-    analysis_cache: dict[tuple[str, float, float], BetAnalysis],
+    analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]],
 ):
     player_name_raw = outcome.description
     normalized_name = player_name_raw.lower()
@@ -73,7 +71,6 @@ async def analyze_bet(
         raise ValueError(f"Player not found in DB: {player=}")
 
     line = outcome.point
-    over_under = outcome.name
     price = outcome.price
 
     # Get the player's team abbreviation
@@ -88,7 +85,7 @@ async def analyze_bet(
         logger.debug(f"Found existing bet with key {bet_key=}. Skipping analysis")
         return None
 
-    team_abv = player_team_abv = nba_teams_dict[player.team_id].abv
+    team_abv = player_team_abv = nba_teams_dict[player.team_id].team_abv
     if team_abv == home_team_abv:
         opponent_abv = away_team_abv
     elif team_abv == away_team_abv:
@@ -101,36 +98,36 @@ async def analyze_bet(
             f"team abv not found {player_team_abv=} {home_team_abv=} {away_team_abv=} {outcome=}"
         )
 
-    request_json: dict[str, t.Any] = {
-        "player_id": player.id,
-        "team_code": player_team_abv,
-        "stat": stat_type,
-        "line": line,
-        "opponent": opponent_abv,
-        "over_under": over_under.lower(),
-    }
+    req = BetAnalysisInput(
+        player_id=player.player_id,
+        team_code=player_team_abv,
+        stat=stat_type,
+        line=line,
+        opponent_abv=opponent_abv,
+    )
 
-    logger.info(f"Calling backend for {player_name_raw}: {request_json}")
+    logger.info(f"Calling backend for {player_name_raw}: {req.model_dump()}")
 
     api_url = os.environ["NBA_ANALYSIS_API_URL"]
     headers = {"Content-Type": "application/json"}
-    r = await client.post(api_url, json=request_json, headers=headers)
+    r = await client.post(api_url, json=req.model_dump(), headers=headers)
     r.raise_for_status()
 
     response_data = r.json()
 
     logger.info(f"Backend success: {response_data=}")
-    bet_analysis = bet_analysis_from_json(response_data)
-    bet_analysis.price_val = price
+    bet_analysis = BetAnalysis.model_validate(response_data)
     logger.info(f"Parse backend: {bet_analysis=}")
 
     # if the analysis doesn't match, then we don't want users to be able to see the bet
     if outcome.name != bet_analysis.over_under:
         return None
 
-    analysis_cache[bet_key] = bet_analysis
+    bet_analysis = BetAnalysis.model_validate(response_data)
+    logger.info(f"Parse backend: {bet_analysis=}")
 
-    return bet_analysis
+    analysis_cache[bet_key] = (bet_analysis, price)
+    return bet_analysis, price
 
 
 async def fetch_game_bets(
@@ -168,13 +165,13 @@ async def fetch_game_bets(
     resp_odds.raise_for_status()
     odds_data = resp_odds.json()
 
-    game = game_from_json(odds_data)
-    logger.debug(f"{game=}")
+    game = Game.model_validate(odds_data)
+    logger.info(f"{game=}")
 
-    backend_results: list[BetAnalysis | Exception | None] = []
+    backend_results: list[tuple[BetAnalysis, float] | None | Exception] = []
 
-    # desc, price, point
-    analysis_cache: dict[tuple[str, float, float], BetAnalysis] = {}
+    # desc, price, stat
+    analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]] = {}
 
     def analyze_bet_inner(outcome: Outcome, stat: str):
         return analyze_bet(
@@ -205,13 +202,11 @@ async def fetch_game_bets(
                         10,
                     )
                 )
-
-    backend_results_filtered: list[BetAnalysis | Exception] = list(
+    results_filtered: list[tuple[BetAnalysis, float] | Exception] = list(
         filter(lambda x: x is not None, backend_results)
     )  # type: ignore
-    # ^ getting all of the 'none' bets out (ones that don't match analysis from odds-api)
-    logger.info(f"Filtered {len(backend_results)} -> {len(backend_results_filtered)}")
-    return backend_results_filtered, game
+    logger.warning(f"Filtered {len(backend_results)} -> {len(results_filtered)}")
+    return results_filtered, game
 
 
 async def fetch_sport(
@@ -230,7 +225,7 @@ async def fetch_sport(
     return events_list
 
 
-async def run(pool: DBPool):
+async def run(pool: Pool):
     logger.info("Starting NBA analysis")
     sport = "basketball_nba"
     # "americanfootball_nfl"
@@ -262,10 +257,10 @@ async def run(pool: DBPool):
     nba_player_dict, nba_teams_dict = await asyncio.gather(
         load_nba_players_from_db(pool), load_nba_teams_from_db(pool)
     )
-    team_fullname_map = build_team_fullname_map(nba_teams_dict)
+    team_fullname_map = build_nba_team_fullname_map(nba_teams_dict)
 
     all_games: list[Game] = []
-    backend_results: list[BetAnalysis | Exception] = []
+    backend_results: list[tuple[BetAnalysis, float] | Exception] = []
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
 
@@ -283,7 +278,7 @@ async def run(pool: DBPool):
     # logger.info("--- Backend Results ---")
     logger.info(f"Got {len(backend_results)} analysis results")
 
-    successes: list[BetAnalysis] = []
+    successes: list[tuple[BetAnalysis, float]] = []
     for result in backend_results:
         if isinstance(result, Exception):
             logger.error(result)
@@ -294,14 +289,13 @@ async def run(pool: DBPool):
         res = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
             columns=[
-                "player_id",
-                "team_id",
-                "opponent_id",
-                "stat",
-                "line",
-                "price",
                 "analysis",
             ],
-            records=list(map(bet_analysis_to_tuple, successes)),
+            records=list(
+                map(
+                    lambda tup: (tup[0].model_dump_json(), tup[1]),
+                    successes,
+                )
+            ),
         )
         logger.info(res)
