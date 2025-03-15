@@ -13,3 +13,6 @@ wheels/
 
 logs/
 .DS_Store
+
+.vscode/
+

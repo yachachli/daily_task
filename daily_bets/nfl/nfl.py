@@ -94,12 +94,8 @@ async def fetch_sport(
     resp = await client.get(url, params=params)
     resp.raise_for_status()
     data = resp.json()
-    if not data:
-        logger.warning(f"No {sport} events found in this date range.")
-        return []
-    else:
-        logger.info(f"Found {len(data)} {sport} events.")
-        return [SportEvent(**ev) for ev in data]
+    logger.info(f"Found {len(data)} {sport} events.")
+    return [SportEvent(**ev) for ev in data]
 
 
 async def analyze_bet(
@@ -281,6 +277,7 @@ async def run(pool: Pool):
         events = await fetch_sport(
             client, "americanfootball_nfl", events_url, params_events
         )
+        logger.debug(f"{events=}")
         if not events:
             logger.error(f"No events for NFL in {day_start} to {day_end}")
             return

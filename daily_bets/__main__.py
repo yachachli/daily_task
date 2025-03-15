@@ -19,6 +19,7 @@ async def main():
     logger.info("Running daily bets analysis")
 
     await nba.run(pool)
+    # await nfl.run(pool)
 
 
 if __name__ == "__main__":
