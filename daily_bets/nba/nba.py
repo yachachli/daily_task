@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import typing as t
 from datetime import datetime, timedelta, timezone
@@ -28,28 +27,28 @@ R = t.TypeVar("R")
 
 
 MARKET_TO_STAT = {
-    # "player_assists": "assists",
-    # "player_assists_alternate": "assists",
+    "player_assists": "assists",
+    "player_assists_alternate": "assists",
     "player_points": "points",
-    # "player_points_alternate": "points",
-    # "player_points_assists": "points + assists",
-    # "player_points_assists_alternate": "points + assists",
-    # "player_rebounds": "rebounds",
-    # "player_rebounds_alternate": "rebounds",
-    # "player_points_rebounds": "points + rebounds",
-    # "player_points_rebounds_alternate": "points + rebounds",
-    # "player_points_rebounds_assists": "points + rebounds + assists",
-    # "player_points_rebounds_assists_alternate": "points + rebounds + assists",
-    # "player_rebounds_assists": "rebounds + assists",
-    # "player_rebounds_assists_alternate": "rebounds + assists",
-    # "player_threes": "threes",
-    # "player_threes_alternate": "threes",
-    # "player_blocks": "blocks",
-    # "player_blocks_alternate": "blocks",
-    # "player_steals_alternate": "steals",
-    # "player_steals": "steals",
-    # "player_turnovers": "turnovers",
-    # "player_turnovers_alternate": "turnovers",
+    "player_points_alternate": "points",
+    "player_points_assists": "points + assists",
+    "player_points_assists_alternate": "points + assists",
+    "player_rebounds": "rebounds",
+    "player_rebounds_alternate": "rebounds",
+    "player_points_rebounds": "points + rebounds",
+    "player_points_rebounds_alternate": "points + rebounds",
+    "player_points_rebounds_assists": "points + rebounds + assists",
+    "player_points_rebounds_assists_alternate": "points + rebounds + assists",
+    "player_rebounds_assists": "rebounds + assists",
+    "player_rebounds_assists_alternate": "rebounds + assists",
+    "player_threes": "threes",
+    "player_threes_alternate": "threes",
+    "player_blocks": "blocks",
+    "player_blocks_alternate": "blocks",
+    "player_steals_alternate": "steals",
+    "player_steals": "steals",
+    "player_turnovers": "turnovers",
+    "player_turnovers_alternate": "turnovers",
 }
 
 
@@ -82,10 +81,9 @@ async def analyze_bet(
         raise ValueError(f"Team not found in DB: {player.team_id=}")
 
     bet_key = (outcome.description, outcome.price, outcome.point)
-    if (analysis_cache.get(bet_key)) is not None:
-        logger.info(f"Found existing bet with key {bet_key=}. Skipping analysis")
+    if bet_key in analysis_cache:
+        logger.debug(f"Found existing bet with key {bet_key=}. Skipping analysis")
         return None
-        # return existing
 
     team_abv = player_team_abv = nba_teams_dict[player.team_id].team_abv
     if team_abv == home_team_abv:
@@ -110,13 +108,20 @@ async def analyze_bet(
 
     logger.info(f"Calling backend for {player_name_raw}: {req.model_dump()}")
 
-    apiUrl = os.environ["NBA_ANALYSIS_API_URL"]
+    api_url = os.environ["NBA_ANALYSIS_API_URL"]
     headers = {"Content-Type": "application/json"}
-    r = await client.post(apiUrl, json=req.model_dump(), headers=headers)
+    r = await client.post(api_url, json=req.model_dump(), headers=headers)
     r.raise_for_status()
 
     response_data = r.json()
+
     logger.info(f"Backend success: {response_data=}")
+    bet_analysis = BetAnalysis.model_validate(response_data)
+    logger.info(f"Parse backend: {bet_analysis=}")
+
+    # if the analysis doesn't match, then we don't want users to be able to see the bet
+    if outcome.name != bet_analysis.over_under:
+        return None
 
     bet_analysis = BetAnalysis.model_validate(response_data)
     logger.info(f"Parse backend: {bet_analysis=}")
@@ -133,9 +138,9 @@ async def fetch_game_bets(
     nba_player_dict: dict[str, NbaPlayer],
     nba_teams_dict: dict[str, NbaTeam],
 ):
-    logger.info(f"Fetching bets for {event=} {i=}")
+    logger.debug(f"Fetching bets for {event=} {i=}")
 
-    logger.info(
+    logger.debug(
         f"{i}. {event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event_id={event.id}"
     )
 
@@ -149,7 +154,6 @@ async def fetch_game_bets(
     home_team_abv = team_fullname_map.get(event.home_team.lower(), "???")
 
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
-    logger.info("{single_odds_url=}")
     odds_params = {
         "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
@@ -195,7 +199,7 @@ async def fetch_game_bets(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
-                        100,
+                        10,
                     )
                 )
     results_filtered: list[tuple[BetAnalysis, float] | Exception] = list(
@@ -286,7 +290,6 @@ async def run(pool: Pool):
             "v2_nba_daily_bets",
             columns=[
                 "analysis",
-                "price",
             ],
             records=list(
                 map(

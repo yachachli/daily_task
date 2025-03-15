@@ -1,10 +1,16 @@
 import json
 from os import environ
 import typing
+from typing import TYPE_CHECKING
 
 import asyncpg
 
 from daily_bets.logger import logger
+
+if TYPE_CHECKING:
+    type DBPool = asyncpg.Pool[asyncpg.Record]
+else:
+    DBPool = asyncpg.Pool
 
 
 def encode_jsonb(data: typing.Any):
