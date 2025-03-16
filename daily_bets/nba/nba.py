@@ -20,35 +20,35 @@ from daily_bets.models import (
     load_nba_players_from_db,
     load_nba_teams_from_db,
 )
-from daily_bets.utils import batch_calls
+from daily_bets.utils import batch_calls, normalize_name
 
 T = t.TypeVar("T")
 R = t.TypeVar("R")
 
 
 MARKET_TO_STAT = {
-    "player_assists": "assists",
-    "player_assists_alternate": "assists",
+    # "player_assists": "assists",
+    # "player_assists_alternate": "assists",
     "player_points": "points",
-    "player_points_alternate": "points",
-    "player_points_assists": "points + assists",
-    "player_points_assists_alternate": "points + assists",
-    "player_rebounds": "rebounds",
-    "player_rebounds_alternate": "rebounds",
-    "player_points_rebounds": "points + rebounds",
-    "player_points_rebounds_alternate": "points + rebounds",
-    "player_points_rebounds_assists": "points + rebounds + assists",
-    "player_points_rebounds_assists_alternate": "points + rebounds + assists",
-    "player_rebounds_assists": "rebounds + assists",
-    "player_rebounds_assists_alternate": "rebounds + assists",
-    "player_threes": "threes",
-    "player_threes_alternate": "threes",
-    "player_blocks": "blocks",
-    "player_blocks_alternate": "blocks",
-    "player_steals_alternate": "steals",
-    "player_steals": "steals",
-    "player_turnovers": "turnovers",
-    "player_turnovers_alternate": "turnovers",
+    # "player_points_alternate": "points",
+    # "player_points_assists": "points + assists",
+    # "player_points_assists_alternate": "points + assists",
+    # "player_rebounds": "rebounds",
+    # "player_rebounds_alternate": "rebounds",
+    # "player_points_rebounds": "points + rebounds",
+    # "player_points_rebounds_alternate": "points + rebounds",
+    # "player_points_rebounds_assists": "points + rebounds + assists",
+    # "player_points_rebounds_assists_alternate": "points + rebounds + assists",
+    # "player_rebounds_assists": "rebounds + assists",
+    # "player_rebounds_assists_alternate": "rebounds + assists",
+    # "player_threes": "threes",
+    # "player_threes_alternate": "threes",
+    # "player_blocks": "blocks",
+    # "player_blocks_alternate": "blocks",
+    # "player_steals_alternate": "steals",
+    # "player_steals": "steals",
+    # "player_turnovers": "turnovers",
+    # "player_turnovers_alternate": "turnovers",
 }
 
 
@@ -63,12 +63,12 @@ async def analyze_bet(
     analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]],
 ):
     player_name_raw = outcome.description
-    normalized_name = player_name_raw.lower()
+    name = normalize_name(player_name_raw)
 
-    player = nba_player_dict.get(normalized_name)
+    player = nba_player_dict.get(name)
     if not player:
-        logger.error(f"Player not found in DB: {player=}")
-        raise ValueError(f"Player not found in DB: {player=}")
+        logger.error(f"Player not found in DB: {player=} {name=}")
+        raise ValueError(f"Player not found in DB: {player=} {name=}")
 
     line = outcome.point
     price = outcome.price
@@ -120,7 +120,10 @@ async def analyze_bet(
     logger.info(f"Parse backend: {bet_analysis=}")
 
     # if the analysis doesn't match, then we don't want users to be able to see the bet
-    if outcome.name != bet_analysis.over_under:
+    if outcome.name.lower() != (bet_analysis.over_under or "").lower():
+        logger.debug(
+            f"Analysis doesn't match expected: {outcome.name}, ours: {bet_analysis.over_under}"
+        )
         return None
 
     bet_analysis = BetAnalysis.model_validate(response_data)
@@ -139,19 +142,21 @@ async def fetch_game_bets(
     nba_teams_dict: dict[str, NbaTeam],
 ):
     logger.debug(f"Fetching bets for {event=} {i=}")
+    home_team = normalize_name(event.home_team)
+    away_team = normalize_name(event.away_team)
 
     logger.debug(
-        f"{i}. {event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event_id={event.id}"
+        f"{i}. {event.sport_key} | {away_team} @ {home_team} | commence_time={event.commence_time} | event_id={event.id}"
     )
 
     # Convert home/away team names to abbreviations
-    if event.away_team not in team_fullname_map.keys():
-        logger.warning(f"Team not found {event.away_team}")
-    if event.home_team not in team_fullname_map.keys():
-        logger.warning(f"Team not found {event.home_team}")
+    if away_team not in team_fullname_map.keys():
+        logger.warning(f"Team not found {away_team}")
+    if home_team not in team_fullname_map.keys():
+        logger.warning(f"Team not found {home_team}")
 
-    away_team_abv = team_fullname_map.get(event.away_team.lower(), "???")
-    home_team_abv = team_fullname_map.get(event.home_team.lower(), "???")
+    away_team_abv = team_fullname_map.get(away_team, "???")
+    home_team_abv = team_fullname_map.get(home_team, "???")
 
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
     odds_params = {
@@ -202,10 +207,14 @@ async def fetch_game_bets(
                         10,
                     )
                 )
+    logger.debug("backend results batched")
+    logger.debug(backend_results)
     results_filtered: list[tuple[BetAnalysis, float] | Exception] = list(
         filter(lambda x: x is not None, backend_results)
     )  # type: ignore
     logger.warning(f"Filtered {len(backend_results)} -> {len(results_filtered)}")
+    logger.debug("backend results batched filtered")
+    logger.debug(results_filtered)
     return results_filtered, game
 
 
@@ -278,6 +287,9 @@ async def run(pool: Pool):
     # logger.info("--- Backend Results ---")
     logger.info(f"Got {len(backend_results)} analysis results")
 
+    logger.debug("backend_results")
+    logger.debug(backend_results)
+
     successes: list[tuple[BetAnalysis, float]] = []
     for result in backend_results:
         if isinstance(result, Exception):
@@ -285,11 +297,15 @@ async def run(pool: Pool):
         else:
             successes.append(result)
 
+    logger.debug("successes")
+    logger.debug(successes)
+
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
             columns=[
                 "analysis",
+                "price",
             ],
             records=list(
                 map(

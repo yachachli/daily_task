@@ -59,3 +59,7 @@ async def batch_calls(
             )  # type: ignore Wants BaseException but doesn't work with Exception for some reason
         )
     return results
+
+
+def normalize_name(name: str) -> str:
+    return name.strip().lower().replace(".", "")

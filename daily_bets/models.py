@@ -3,6 +3,8 @@ import typing as t
 from pydantic import BaseModel
 from asyncpg import Pool
 
+from daily_bets.utils import normalize_name
+
 
 class SportEvent(BaseModel):
     id: str
@@ -34,6 +36,7 @@ class BetAnalysisInput(BaseModel):
 class GraphV1Data(BaseModel):
     value: float
     label: str
+    date: str
 
 
 class GraphV1(BaseModel):
@@ -45,7 +48,7 @@ class GraphV1(BaseModel):
 
 class BetAnalysis(BaseModel):
     over_under: t.Literal["over"] | t.Literal["under"] | None
-    grade: str
+    grade: int
     league: t.Literal["NBA"] | t.Literal["NFL"]
     injury: Injury | None
     insights: list[str]
@@ -137,8 +140,8 @@ async def load_nba_players_from_db(pool: Pool):
         player_dict: dict[str, NbaPlayer] = {}
         for row in rows:
             row = dict(row)
-            normalized_name: str = row["name"].strip().lower()
-            player_dict[normalized_name] = NbaPlayer.model_validate(row)
+            name = normalize_name(row["name"])
+            player_dict[name] = NbaPlayer.model_validate(row)
 
     return player_dict
 
@@ -168,7 +171,7 @@ def build_nba_team_fullname_map(teams_dict: dict[str, NbaTeam]):
     """
     full_map: dict[str, str] = {}
     for _, team in teams_dict.items():
-        full_team_str = f"{team.team_city} {team.name}".strip().lower()
+        full_team_str = normalize_name(f"{team.team_city} {team.name}")
         full_map[full_team_str] = team.team_abv
     return full_map
 
