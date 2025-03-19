@@ -1,9 +1,6 @@
 import typing as t
 
 from pydantic import BaseModel
-from asyncpg import Pool
-
-from daily_bets.utils import normalize_name
 
 
 class SportEvent(BaseModel):
@@ -94,12 +91,13 @@ class Game(BaseModel):
 
 class NbaPlayer(BaseModel):
     id: int
+    player_id: int
     name: str
     position: str | None = None
-    team_id: int | None = None
     player_pic: str | None = None
-    player_id: int
     injury: list[Injury] | None
+    team_id: int
+    team_abv: str
 
 
 class NbaSeasons(BaseModel):
@@ -126,54 +124,6 @@ class NbaTeam(BaseModel):
     team_fta: float
     pace: float
     def_rtg: float
-
-
-async def load_nba_players_from_db(pool: Pool):
-    """Returns a dict mapping LOWERCASE `player_name` to `NbaPlayer`."""
-    query = """
-        SELECT *
-        FROM nba_players
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query)
-
-        player_dict: dict[str, NbaPlayer] = {}
-        for row in rows:
-            row = dict(row)
-            name = normalize_name(row["name"])
-            player_dict[name] = NbaPlayer.model_validate(row)
-
-    return player_dict
-
-
-async def load_nba_teams_from_db(pool: Pool):
-    """Returns a dict mapping `team_id` to `NbaTeam`."""
-    query = """
-        SELECT *
-        FROM nba_teams
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query)
-
-        teams_dict: dict[str, NbaTeam] = {}
-        for row in rows:
-            row = dict(row)
-            t_id = row["id"]
-            teams_dict[t_id] = NbaTeam.model_validate(row)
-
-    return teams_dict
-
-
-def build_nba_team_fullname_map(teams_dict: dict[str, NbaTeam]):
-    """Returns a dict mapping full name (city + ' ' + name) in lowercase to the team's abbreviation.
-
-    For example, 'charlotte hornets' -> 'CHA'.
-    """
-    full_map: dict[str, str] = {}
-    for _, team in teams_dict.items():
-        full_team_str = normalize_name(f"{team.team_city} {team.name}")
-        full_map[full_team_str] = team.team_abv
-    return full_map
 
 
 class NflPlayer(BaseModel):
