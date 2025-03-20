@@ -7,7 +7,7 @@ on:
 jobs:
   run-nba-analysis:
     runs-on: ubuntu-latest
-    stragety:
+    strategy:
       matrix:
         stats: ['player_assists', 'player_assists_alternate', 'player_points', 'player_points_alternate', 'player_points_assists', 'player_points_assists_alternate', 'player_rebounds', 'player_rebounds_alternate', 'player_points_rebounds', 'player_points_rebounds_alternate', 'player_points_rebounds_assists', 'player_points_rebounds_assists_alternate', 'player_rebounds_assists', 'player_rebounds_assists_alternate', 'player_threes', 'player_threes_alternate', 'player_blocks', 'player_blocks_alternate', 'player_steals_alternate', 'player_steals', 'player_turnovers', 'player_turnovers_alternate']
       fail-fast: false
