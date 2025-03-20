@@ -19,7 +19,8 @@ async def main():
 
     if len(sys.argv) < 2:
         logger.info("Running daily bets analysis with all stats")
-        await nba.run(pool, nba.MARKET_TO_STAT.keys())
+        await nba.run(pool, list(nba.MARKET_TO_STAT.keys()))
+        return
 
     stat = sys.argv[1]
     if stat not in nba.MARKET_TO_STAT:
