@@ -212,11 +212,11 @@ async def analyze_bet(
 async def fetch_game_bets(
     client: httpx.AsyncClient,
     event: SportEvent,
-    i: int,
     nba_map: NbaMap,
+    stats: list[str],
 ):
     logger.debug(
-        f"{i}. {event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
+        f"{event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
     )
     if (home_team_abv := nba_map.team_abv(event.home_team)) is None:
         logger.error(f"Team not found {event.home_team} in db")
@@ -229,7 +229,7 @@ async def fetch_game_bets(
     odds_params = {
         "apiKey": os.environ["API_KEY"],
         "regions": "us_dfs",  # or "us"
-        "markets": ",".join(MARKET_TO_STAT.keys()),
+        "markets": ",".join(stats),
         "oddsFormat": "decimal",
     }
 
@@ -278,7 +278,7 @@ async def fetch_game_bets(
 
     for res in backend_results:
         if isinstance(res, Exception):
-            logger.error(res)
+            logger.error(f"Error calling backend {res}")
 
     results_filtered = [
         res
@@ -306,7 +306,7 @@ async def fetch_sport(
     return events_list
 
 
-async def run(pool: Pool):
+async def run(pool: Pool, stats: list[str]):
     logger.info("Starting NBA analysis")
     sport = "basketball_nba"
 
@@ -343,18 +343,16 @@ async def run(pool: Pool):
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
 
     async with httpx.AsyncClient(timeout=30) as client:
-        for i, event in enumerate(all_events, start=1):
-            res = await fetch_game_bets(client, event, i, nba_map)
+        for event in all_events:
+            res = await fetch_game_bets(client, event, nba_map, stats)
             if res is None:
                 continue
             backend_results_batch, game = res
             backend_results.extend(backend_results_batch)
             all_games.append(game)
 
-    # logger.info("--- All Single-Event Odds Data ---")
     logger.info(f"Got {len(all_games)} odds data events")
 
-    # logger.info("--- Backend Results ---")
     logger.info(f"Got {len(backend_results)} analysis results")
 
     async with pool.acquire() as conn:

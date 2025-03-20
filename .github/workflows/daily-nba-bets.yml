@@ -1,29 +1,27 @@
 name: Daily NBA Betting Analysis
-
 on:
   schedule:
     # Run at 5 AM PST (1 PM UTC)
     - cron: '0 13 * * *'
-  workflow_dispatch:  # Allows manual triggering from GitHub UI
-
+  workflow_dispatch: # Allows manual triggering from GitHub UI
 jobs:
   run-nba-analysis:
     runs-on: ubuntu-latest
-    
+    stragety:
+      matrix:
+        stats: ['player_assists', 'player_assists_alternate', 'player_points', 'player_points_alternate', 'player_points_assists', 'player_points_assists_alternate', 'player_rebounds', 'player_rebounds_alternate', 'player_points_rebounds', 'player_points_rebounds_alternate', 'player_points_rebounds_assists', 'player_points_rebounds_assists_alternate', 'player_rebounds_assists', 'player_rebounds_assists_alternate', 'player_threes', 'player_threes_alternate', 'player_blocks', 'player_blocks_alternate', 'player_steals_alternate', 'player_steals', 'player_turnovers', 'player_turnovers_alternate']
+      fail-fast: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          
       - name: Run NBA analysis
         env:
           API_KEY: ${{ secrets.API_KEY }}
@@ -32,4 +30,4 @@ jobs:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASS: ${{ secrets.DB_PASS }}
           DB_HOST: ${{ secrets.DB_HOST }}
-        run: python -m daily_bets 
+        run: python -m daily_bets ${{ matrix.stat }}

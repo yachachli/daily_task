@@ -3,7 +3,7 @@ import asyncio
 from daily_bets.nba import nba
 from daily_bets.db import db_pool
 from daily_bets.logger import setup_logging, logger
-
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -16,9 +16,17 @@ except ImportError:
 async def main():
     setup_logging()
     pool = await db_pool()
-    logger.info("Running daily bets analysis")
 
-    await nba.run(pool)
+    if len(sys.argv) < 2:
+        logger.info("Running daily bets analysis with all stats")
+        await nba.run(pool, nba.MARKET_TO_STAT.keys())
+
+    stat = sys.argv[1]
+    if stat not in nba.MARKET_TO_STAT:
+        logger.error(f"{stat} not one of {nba.MARKET_TO_STAT.keys()}")
+        return
+
+    await nba.run(pool, [stat])
     # await nfl.run(pool)
 
 
