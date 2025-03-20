@@ -216,7 +216,7 @@ async def fetch_game_bets(
     stats: list[str],
 ):
     logger.debug(
-        f"{event.sport_key} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
+        f"{event.sport_key} | {stats} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
     )
     if (home_team_abv := nba_map.team_abv(event.home_team)) is None:
         logger.error(f"Team not found {event.home_team} in db")
@@ -248,20 +248,27 @@ async def fetch_game_bets(
     analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]] = {}
 
     def analyze_bet_inner(outcome: Outcome, stat: str):
-        return analyze_bet(
-            client,
-            outcome,
-            home_team_abv,
-            away_team_abv,
-            stat,
-            nba_map,
-            analysis_cache,
-        )
+        try:
+            return analyze_bet(
+                client,
+                outcome,
+                home_team_abv,
+                away_team_abv,
+                stat,
+                nba_map,
+                analysis_cache,
+            )
+        except Exception as e:
+            logger.error(f"Error running analysis: {e}", exc_info=True)
+            raise e
+
+    logger.info(
+        f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
+    )
 
     async with httpx.AsyncClient(timeout=30) as client:
         for bookmaker in game.bookmakers:
             for market in bookmaker.markets:
-                logger.info(f"{market=}")
                 stat_type = MARKET_TO_STAT.get(market.key)
                 if stat_type is None:
                     logger.warning(f"Unknown market key {market.key=}")
@@ -275,10 +282,6 @@ async def fetch_game_bets(
                         10,
                     )
                 )
-
-    for res in backend_results:
-        if isinstance(res, Exception):
-            logger.error(f"Error calling backend {res}")
 
     results_filtered = [
         res
@@ -314,21 +317,23 @@ async def run(pool: Pool, stats: list[str]):
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=2) - timedelta(seconds=1)
 
+    day_start_iso = day_start.isoformat().replace("+00:00", "Z")
+    day_end_iso = day_end.isoformat().replace("+00:00", "Z")
     async with httpx.AsyncClient(timeout=30) as client:
         get_events_url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
         params_events = {
             "apiKey": os.environ["API_KEY"],
-            "commenceTimeFrom": day_start.isoformat().replace("+00:00", "Z"),
-            "commenceTimeTo": day_end.isoformat().replace("+00:00", "Z"),
+            "commenceTimeFrom": day_start_iso,
+            "commenceTimeTo": day_end_iso,
         }
-        logger.info("fetching events")
+        logger.info(f"Fetching events from {day_start_iso} to {day_end_iso}")
         all_events = await fetch_sport(client, sport, get_events_url, params_events)
-        for result in all_events:
-            logger.info(f"{result=}")
+        for event in all_events:
+            logger.info(f"  {event}")
 
     if not all_events:
         logger.error(
-            f"No events at all for NBA between {day_start} and {day_end}. Exiting."
+            f"No events at all for NBA between {day_start_iso} and {day_end_iso}. Exiting."
         )
         return
     else:
@@ -341,7 +346,6 @@ async def run(pool: Pool, stats: list[str]):
     backend_results: list[tuple[BetAnalysis, float]] = []
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
-
     async with httpx.AsyncClient(timeout=30) as client:
         for event in all_events:
             res = await fetch_game_bets(client, event, nba_map, stats)

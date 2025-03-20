@@ -27,6 +27,7 @@ async def main():
         logger.error(f"{stat} not one of {nba.MARKET_TO_STAT.keys()}")
         return
 
+    logger.info(f"Running daily bets analysis with stat {stat}")
     await nba.run(pool, [stat])
     # await nfl.run(pool)
 
