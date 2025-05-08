@@ -381,7 +381,7 @@ async def run(pool: Pool, stats: list[str]):
                     lambda tup: (
                         tup[0].model_dump_json(),
                         tup[1],
-                        parse_datetime(tup[2]),
+                        tup[2],
                     ),
                     backend_results,
                 )
