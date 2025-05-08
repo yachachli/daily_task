@@ -363,7 +363,7 @@ async def run(pool: Pool, stats: list[str]):
 
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
-            "v2_nba_daily_bets",
+            "v2_nba_daily_bets_test",
             columns=[
                 "analysis",
                 "price",
