@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from asyncpg import Pool
 import httpx
 from httpx._types import QueryParamTypes
+from dateutil.parser import parse as parse_datetime
 
 from daily_bets.logger import logger
 from daily_bets.models import (
@@ -274,14 +275,19 @@ async def fetch_game_bets(
                     logger.warning(f"Unknown market key {market.key=}")
                     continue
                 outcomes = market.outcomes
-
-                backend_results.extend(
-                    await batch_calls(
-                        map(lambda o: (o, stat_type), outcomes),
-                        analyze_bet_inner,
-                        8,
-                    )
-                )
+                for outcome in outcomes:
+                    result = await analyze_bet_inner(outcome, stat_type)
+                    if result is not None and not isinstance(result, Exception):
+                        # Return a single-bet batch and the game
+                        return [result], game
+                # backend_results.extend(
+                #     await batch_calls(
+                #         map(lambda o: (o, stat_type), outcomes),
+                #         analyze_bet_inner,
+                #         8,
+                #     )
+                # )
+    return [], game
 
     results_filtered = [
         res
@@ -347,13 +353,14 @@ async def run(pool: Pool, stats: list[str]):
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
     async with httpx.AsyncClient(timeout=30) as client:
-        for event in all_events:
+        for event in all_events[:1]:
             res = await fetch_game_bets(client, event, nba_map, stats)
             if res is None:
                 continue
             backend_results_batch, game = res
             backend_results.extend(
-                (bet, price, game.commence_time) for bet, price in backend_results_batch
+                (bet, price, parse_datetime(game.commence_time))
+                for bet, price in backend_results_batch
             )
             all_games.append(game)
 
@@ -370,7 +377,14 @@ async def run(pool: Pool, stats: list[str]):
                 "game_time",
             ],
             records=list(
-                map(lambda tup: (tup[0].model_dump_json(), tup[1], tup[2]), backend_results)
-            ),
+                    map(
+                    lambda tup: (
+                        tup[0].model_dump_json(),
+                        tup[1],
+                        parse_datetime(tup[2]),
+                    ),
+                    backend_results,
+                )
+            ),  
         )
         logger.info(res)
