@@ -267,27 +267,21 @@ async def fetch_game_bets(
         f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
     )
 
-    async with httpx.AsyncClient(timeout=80) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         for bookmaker in game.bookmakers:
             for market in bookmaker.markets:
                 stat_type = MARKET_TO_STAT.get(market.key)
                 if stat_type is None:
                     logger.warning(f"Unknown market key {market.key=}")
                     continue
-                outcomes = market.outcomes
-                for outcome in outcomes:
-                    result = await analyze_bet_inner(outcome, stat_type)
-                    if result is not None and not isinstance(result, Exception):
-                        # Return a single-bet batch and the game
-                        return [result], game
-                # backend_results.extend(
-                #     await batch_calls(
-                #         map(lambda o: (o, stat_type), outcomes),
-                #         analyze_bet_inner,
-                #         8,
-                #     )
-                # )
-    return [], game
+                outcomes = market.outcomes                
+                backend_results.extend(
+                    await batch_calls(
+                        map(lambda o: (o, stat_type), outcomes),
+                        analyze_bet_inner,
+                        6,
+                    )
+                )
 
     results_filtered = [
         res
@@ -353,7 +347,7 @@ async def run(pool: Pool, stats: list[str]):
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
     async with httpx.AsyncClient(timeout=30) as client:
-        for event in all_events[:1]:
+        for event in all_events:
             res = await fetch_game_bets(client, event, nba_map, stats)
             if res is None:
                 continue
@@ -370,7 +364,7 @@ async def run(pool: Pool, stats: list[str]):
 
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
-            "v2_nba_daily_bets_test",
+            "v2_nba_daily_bets",
             columns=[
                 "analysis",
                 "price",
