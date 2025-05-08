@@ -266,7 +266,7 @@ async def fetch_game_bets(
         f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
     )
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=80) as client:
         for bookmaker in game.bookmakers:
             for market in bookmaker.markets:
                 stat_type = MARKET_TO_STAT.get(market.key)
@@ -279,7 +279,7 @@ async def fetch_game_bets(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
-                        10,
+                        8,
                     )
                 )
 
@@ -370,10 +370,7 @@ async def run(pool: Pool, stats: list[str]):
                 "game_time",
             ],
             records=list(
-                map(
-                    lambda tup: (tup[0].model_dump_json(), tup[1]),
-                    backend_results,
-                )
+                map(lambda tup: (tup[0].model_dump_json(), tup[1], tup[2]), backend_results)
             ),
         )
         logger.info(res)
