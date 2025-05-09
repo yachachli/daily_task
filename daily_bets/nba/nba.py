@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from asyncpg import Pool
 import httpx
 from httpx._types import QueryParamTypes
+from dateutil.parser import parse as parse_datetime
 
 from daily_bets.logger import logger
 from daily_bets.models import (
@@ -266,20 +267,19 @@ async def fetch_game_bets(
         f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
     )
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         for bookmaker in game.bookmakers:
             for market in bookmaker.markets:
                 stat_type = MARKET_TO_STAT.get(market.key)
                 if stat_type is None:
                     logger.warning(f"Unknown market key {market.key=}")
                     continue
-                outcomes = market.outcomes
-
+                outcomes = market.outcomes                
                 backend_results.extend(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
                         analyze_bet_inner,
-                        10,
+                        6,
                     )
                 )
 
@@ -352,7 +352,10 @@ async def run(pool: Pool, stats: list[str]):
             if res is None:
                 continue
             backend_results_batch, game = res
-            backend_results.extend(backend_results_batch)
+            backend_results.extend(
+                (bet, price, parse_datetime(game.commence_time))
+                for bet, price in backend_results_batch
+            )
             all_games.append(game)
 
     logger.info(f"Got {len(all_games)} odds data events")
@@ -365,12 +368,17 @@ async def run(pool: Pool, stats: list[str]):
             columns=[
                 "analysis",
                 "price",
+                "game_time",
             ],
             records=list(
-                map(
-                    lambda tup: (tup[0].model_dump_json(), tup[1]),
+                    map(
+                    lambda tup: (
+                        tup[0].model_dump_json(),
+                        tup[1],
+                        tup[2],
+                    ),
                     backend_results,
                 )
-            ),
+            ),  
         )
         logger.info(res)
