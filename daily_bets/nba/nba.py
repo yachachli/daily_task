@@ -105,6 +105,9 @@ class NbaMap:
             player_dict: dict[tuple[str, str], NbaPlayer] = {}
             for row in rows:
                 row = dict(row)
+                if row["team_id"] is None or row["team_abv"] is None:
+                    logger.warning(f"Skipping player with missing team info: {row}")
+                    continue
                 name = normalize_name(row["name"])
                 abv = row["team_abv"]
                 player_dict[(name, abv)] = NbaPlayer.model_validate(row)
