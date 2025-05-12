@@ -349,8 +349,9 @@ async def run(pool: Pool, stats: list[str]):
     backend_results: list[tuple[BetAnalysis, float]] = []
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
+    logger.info(f"Running analysis on only the second game: {all_events[1]}")
     async with httpx.AsyncClient(timeout=30) as client:
-        for event in all_events:
+        for event in all_events[1:2]:
             res = await fetch_game_bets(client, event, nba_map, stats)
             if res is None:
                 continue
