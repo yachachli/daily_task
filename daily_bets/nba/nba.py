@@ -416,10 +416,10 @@ async def run(pool: Pool, stats: list[str]):
     # Use the new list name
     if backend_results_with_tag:
         async with pool.acquire() as conn:
-            logger.info(f"Inserting {len(backend_results_with_tag)} records into v2_nba_daily_bets...")
+            logger.info(f"Inserting {len(backend_results_with_tag)} records into v2_nba_daily_bets_test...")
             # Add 'game_tag' to the columns list
             res = await conn.copy_records_to_table(
-                "v2_nba_daily_bets",
+                "v2_nba_daily_bets_test",
                 columns=[
                     "analysis",
                     "price",
