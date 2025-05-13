@@ -346,7 +346,7 @@ async def run(pool: Pool, stats: list[str]):
     nba_map = await NbaMap.from_db(pool)
 
     all_games: list[Game] = []
-    backend_results: list[tuple[BetAnalysis, float]] = []
+    backend_results_with_tag: list[tuple[BetAnalysis, float, datetime, str]] = []
 
     logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
     async with httpx.AsyncClient(timeout=30) as client:
@@ -355,15 +355,25 @@ async def run(pool: Pool, stats: list[str]):
             if res is None:
                 continue
             backend_results_batch, game = res
-            backend_results.extend(
-                (bet, price, parse_datetime(game.commence_time))
+            home_team_abv = nba_map.team_abv(game.home_team)
+            away_team_abv = nba_map.team_abv(game.away_team)
+            if home_team_abv is None or away_team_abv is None:
+                logger.error(f"Could not get ABVs for game tag. Skipping this game's results.")
+                continue
+
+            # Format the game tag
+            game_tag = f"{away_team_abv}@{home_team_abv}".upper()  # Format as AWAY@HOME
+
+            # Then extend with the game_tag
+            backend_results_with_tag.extend(
+                (bet, price, parse_datetime(game.commence_time), game_tag)
                 for bet, price in backend_results_batch
             )
             all_games.append(game)
 
     logger.info(f"Got {len(all_games)} odds data events")
 
-    logger.info(f"Got {len(backend_results)} analysis results")
+    logger.info(f"Got {len(backend_results_with_tag)} analysis results")
 
     async with pool.acquire() as conn:
         res = await conn.copy_records_to_table(
@@ -372,6 +382,7 @@ async def run(pool: Pool, stats: list[str]):
                 "analysis",
                 "price",
                 "game_time",
+                "game_tag",
             ],
             records=list(
                     map(
@@ -379,8 +390,9 @@ async def run(pool: Pool, stats: list[str]):
                         tup[0].model_dump_json(),
                         tup[1],
                         tup[2],
+                        tup[3],
                     ),
-                    backend_results,
+                    backend_results_with_tag,
                 )
             ),  
         )
