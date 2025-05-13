@@ -149,10 +149,6 @@ async def analyze_bet(
     nba_map: NbaMap,
     analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]],
 ):
-    # player_name_raw = outcome.description
-    # name = normalize_name(player_name_raw)
-    #
-    # player = nba_player_dict.get(name)
     player_and_abv = nba_map.player_with_unknown_team(
         outcome.description, [home_team_abv, away_team_abv]
     )
@@ -165,8 +161,11 @@ async def analyze_bet(
     line = outcome.point
     price = outcome.price
 
+    # IMPORTANT: Include line in cache key
     bet_key = (outcome.description, outcome.price, outcome.point)
     if bet_key in analysis_cache:
+        # Note: For a single bet test, this cache won't be hit much,
+        # but it's good practice to keep it.
         logger.debug(f"Found existing bet with key {bet_key=}. Skipping analysis")
         return None
 
@@ -206,27 +205,34 @@ async def analyze_bet(
         )
         return None
 
-    bet_analysis = BetAnalysis.model_validate(response_data)
-
+    # Add to cache BEFORE returning
     analysis_cache[bet_key] = (bet_analysis, price)
+
+    # Return the validated bet_analysis and price
     return bet_analysis, price
 
 
-# TODO: fetch games in parallel
 async def fetch_game_bets(
     client: httpx.AsyncClient,
     event: SportEvent,
     nba_map: NbaMap,
     stats: list[str],
+    # --- START TEST MOD ---
+    # New parameter to limit to one bet for testing
+    limit_to_one_bet: bool = False,
+    # --- END TEST MOD ---
 ):
     logger.debug(
         f"{event.sport_key} | {stats} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
     )
-    if (home_team_abv := nba_map.team_abv(event.home_team)) is None:
-        logger.error(f"Team not found {event.home_team} in db")
+    home_team_abv = nba_map.team_abv(event.home_team)
+    away_team_abv = nba_map.team_abv(event.away_team)
+
+    if home_team_abv is None:
+        logger.error(f"Home Team not found {event.home_team} in db")
         return None
-    if (away_team_abv := nba_map.team_abv(event.away_team)) is None:
-        logger.error(f"Team not found {event.away_team} in db")
+    if away_team_abv is None:
+        logger.error(f"Away Team not found {event.away_team} in db")
         return None
 
     single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
@@ -239,21 +245,23 @@ async def fetch_game_bets(
 
     resp_odds = await client.get(single_odds_url, params=odds_params)
     if resp_odds.is_error:
+        logger.error(f"Odds API error {resp_odds.status_code} {resp_odds.text}")
         return None
 
     odds_data = resp_odds.json()
 
     game = Game.model_validate(odds_data)
-    logger.info(f"{game=}")
+    logger.info(f"Fetched odds for game: {game.id}")
 
     backend_results: list[tuple[BetAnalysis, float] | None | Exception] = []
 
-    # (desc, price, stat) -> (BetAnalysis, price)
+    # (desc, price, line) -> (BetAnalysis, price)
     analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]] = {}
 
-    def analyze_bet_inner(outcome: Outcome, stat: str):
+    async def analyze_bet_inner(outcome: Outcome, stat: str):
         try:
-            return analyze_bet(
+            # Pass ABVs to analyze_bet
+            return await analyze_bet(
                 client,
                 outcome,
                 home_team_abv,
@@ -267,24 +275,37 @@ async def fetch_game_bets(
             raise e
 
     logger.info(
-        f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
+        f"Processing {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} markets"
     )
 
     async with httpx.AsyncClient(timeout=100) as client:
-        for bookmaker in game.bookmakers:
-            for market in bookmaker.markets:
+        # --- START TEST MOD ---
+        # Iterate just enough to get one bet if limit_to_one_bet is True
+        for i, bookmaker in enumerate(game.bookmakers):
+            for j, market in enumerate(bookmaker.markets):
                 stat_type = MARKET_TO_STAT.get(market.key)
                 if stat_type is None:
                     logger.warning(f"Unknown market key {market.key=}")
                     continue
-                outcomes = market.outcomes                
-                backend_results.extend(
-                    await batch_calls(
-                        map(lambda o: (o, stat_type), outcomes),
-                        analyze_bet_inner,
-                        5,
-                    )
+                outcomes = market.outcomes
+
+                # Process only the first outcome if limiting
+                outcomes_to_process = [outcomes[0]] if limit_to_one_bet and outcomes else outcomes
+
+                results = await batch_calls(
+                    map(lambda o: (o, stat_type), outcomes_to_process),
+                    analyze_bet_inner,
+                    5,
                 )
+                backend_results.extend(results)
+
+                if limit_to_one_bet and backend_results:
+                    # Found and processed at least one bet, stop loops
+                    break
+            if limit_to_one_bet and backend_results:
+                break
+        # --- END TEST MOD ---
+
 
     results_filtered = [
         res
@@ -292,7 +313,8 @@ async def fetch_game_bets(
         if res is not None and not isinstance(res, Exception)
     ]
 
-    logger.info(f"Filtered {len(backend_results)} -> {len(results_filtered)}")
+    logger.info(f"Filtered {len(backend_results)} raw results -> {len(results_filtered)} valid results")
+    # Return the game object along with the filtered results
     return results_filtered, game
 
 
@@ -307,7 +329,6 @@ async def fetch_sport(
         logger.warning(f"No {sport} events found in this date range.")
     else:
         logger.info(f"Found {len(events_list)} {sport} events.")
-        # Tag each event with the sport
 
     return events_list
 
@@ -317,11 +338,15 @@ async def run(pool: Pool, stats: list[str]):
     sport = "basketball_nba"
 
     now = datetime.now(timezone.utc)
-    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=2) - timedelta(seconds=1)
+    # Adjusting day_start/end slightly for potentially getting games that just started or finished recently
+    # depending on how game_time comparison works in the function code.
+    # For testing a specific event, you might want a wider range or target a specific date.
+    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(hours=6)
+    day_end = day_start + timedelta(days=2)
 
     day_start_iso = day_start.isoformat().replace("+00:00", "Z")
     day_end_iso = day_end.isoformat().replace("+00:00", "Z")
+
     async with httpx.AsyncClient(timeout=30) as client:
         get_events_url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
         params_events = {
@@ -331,8 +356,9 @@ async def run(pool: Pool, stats: list[str]):
         }
         logger.info(f"Fetching events from {day_start_iso} to {day_end_iso}")
         all_events = await fetch_sport(client, sport, get_events_url, params_events)
-        for event in all_events:
-            logger.info(f"  {event}")
+        # Use the NBA map built from the DB to get ABVs for game_tag
+        nba_map = await NbaMap.from_db(pool)
+
 
     if not all_events:
         logger.error(
@@ -342,47 +368,78 @@ async def run(pool: Pool, stats: list[str]):
     else:
         logger.info(f"Got {len(all_events)} events")
 
-    logger.info("Building nba map")
-    nba_map = await NbaMap.from_db(pool)
 
-    all_games: list[Game] = []
-    backend_results: list[tuple[BetAnalysis, float]] = []
+    # --- START TEST MOD ---
+    # Change the structure to hold analysis result, price, game_time, AND game_tag
+    backend_results_with_tag: list[tuple[BetAnalysis, float, datetime, str]] = []
+    # --- END TEST MOD ---
 
-    logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
-    logger.info(f"Running analysis on only the second game: {all_events[1]}")
-    async with httpx.AsyncClient(timeout=30) as client:
-        for event in all_events[1:2]:
-            res = await fetch_game_bets(client, event, nba_map, stats)
+
+    logger.info(f"Now fetching single-event odds for a limited number of events...")
+    # --- START TEST MOD ---
+    # Select only ONE event (e.g., the second one in the list)
+    events_to_process = all_events[1:2]
+    logger.info(f"Running analysis on only the first selected game: {events_to_process[0] if events_to_process else 'None'}")
+
+    async with httpx.AsyncClient(timeout=100) as client:
+        for event in events_to_process:
+            # Pass the flag to limit bet processing in fetch_game_bets
+            res = await fetch_game_bets(client, event, nba_map, stats, limit_to_one_bet=True)
             if res is None:
+                logger.error(f"Failed to fetch or process bets for event: {event.id}")
                 continue
             backend_results_batch, game = res
-            backend_results.extend(
-                (bet, price, parse_datetime(game.commence_time))
-                for bet, price in backend_results_batch
+
+            # Get Home and Away ABVs for the game tag
+            home_team_abv = nba_map.team_abv(game.home_team)
+            away_team_abv = nba_map.team_abv(game.away_team)
+
+            if home_team_abv is None or away_team_abv is None:
+                 logger.error(f"Could not get ABVs for game tag: {game.away_team}@{game.home_team}. Skipping insertion for this game's results.")
+                 continue
+
+            # Format the game tag
+            game_tag = f"{away_team_abv}@{home_team_abv}".upper() # Format as AWAY@HOME
+
+            # Append results, adding the game_time and game_tag
+            for bet_analysis, price in backend_results_batch:
+                 backend_results_with_tag.append(
+                     (bet_analysis, price, parse_datetime(game.commence_time), game_tag)
+                 )
+    # --- END TEST MOD ---
+
+
+    logger.info(f"Got {len(backend_results_with_tag)} analysis results with game tags ready for insertion")
+
+    # Only proceed if there are results to insert
+    # --- START TEST MOD ---
+    # Use the new list name
+    if backend_results_with_tag:
+        async with pool.acquire() as conn:
+            logger.info(f"Inserting {len(backend_results_with_tag)} records into v2_nba_daily_bets...")
+            # Add 'game_tag' to the columns list
+            res = await conn.copy_records_to_table(
+                "v2_nba_daily_bets",
+                columns=[
+                    "analysis",
+                    "price",
+                    "game_time",
+                    "game_tag", # Add the new column name
+                ],
+                records=list(
+                        map(
+                        # Update the mapping to include the fourth element (game_tag)
+                        lambda tup: (
+                            tup[0].model_dump_json(), # analysis
+                            tup[1], # price
+                            tup[2], # game_time
+                            tup[3], # game_tag
+                        ),
+                        backend_results_with_tag,
+                    )
+                ),
             )
-            all_games.append(game)
-
-    logger.info(f"Got {len(all_games)} odds data events")
-
-    logger.info(f"Got {len(backend_results)} analysis results")
-
-    async with pool.acquire() as conn:
-        res = await conn.copy_records_to_table(
-            "v2_nba_daily_bets",
-            columns=[
-                "analysis",
-                "price",
-                "game_time",
-            ],
-            records=list(
-                    map(
-                    lambda tup: (
-                        tup[0].model_dump_json(),
-                        tup[1],
-                        tup[2],
-                    ),
-                    backend_results,
-                )
-            ),  
-        )
-        logger.info(res)
+            logger.info(f"Insertion result: {res}")
+    else:
+         logger.warning("No valid analysis results with game tags found to insert.")
+    # --- END TEST MOD ---
