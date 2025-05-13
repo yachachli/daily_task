@@ -2,7 +2,7 @@ name: Daily NBA Betting Analysis
 on:
   schedule:
     # Run at 5 AM PST (1 PM UTC)
-    - cron: '0 13 * * *'
+    - cron: '0 09 * * *'
   workflow_dispatch: # Allows manual triggering from GitHub UI
 jobs:
   run-nba-analysis:
