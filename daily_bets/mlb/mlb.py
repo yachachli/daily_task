@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from asyncpg import Pool
 
-from db import db_pool       # <-- your existing db.py
+from daily_bets.db import db_pool       # <-- your existing db.py
 from pydantic import BaseModel
 
 # ───────── Configuration ─────────
