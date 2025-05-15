@@ -103,10 +103,14 @@ async def run(pool: Pool):
                         resp = await client.post(ANALYSIS_URL, json=payload.model_dump())
                         resp.raise_for_status()
 
+                        commence_dt = datetime.fromisoformat(
+                            game["commence_time"].replace("Z", "+00:00")
+                        )
+
                         records.append((
                             resp.text,
                             o["price"],
-                            game["commence_time"],
+                            commence_dt,
                             tag
                         ))
                         if len(records) >= 20:
