@@ -51,6 +51,7 @@ async def fetch_odds(client: httpx.AsyncClient, event_id: str):
     return resp.json()
 
 # ───────── Main Runner ─────────
+# ───────── Main Runner ─────────
 async def run(pool: Pool):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
     records: list[tuple[str,float,str,str]] = []
@@ -58,46 +59,55 @@ async def run(pool: Pool):
     async with httpx.AsyncClient(timeout=30.0) as client:
         events = await fetch_tomorrow_events(client)
 
-        for game in events:
-            game_dt = datetime.fromisoformat(game["commence_time"].replace("Z","+00:00")).date()
-            if game_dt != tomorrow:
-                continue
+        # Acquire one DB connection for all lookups
+        async with pool.acquire() as db_conn:
+            for game in events:
+                # … your existing date check & odds fetch …
 
-            odds = await fetch_odds(client, game["id"])
-            ug = next((b for b in odds.get("bookmakers", []) if b["title"].lower()=="underdog"), None)
-            if not ug:
-                continue
+                for m in ug["markets"]:
+                    stat = MARKET_TO_STAT.get(m["key"])
+                    if not stat:
+                        continue
 
-            tag = f"{game['away_team']}@{game['home_team']}"
-            for m in ug["markets"]:
-                stat = MARKET_TO_STAT.get(m["key"])
-                if not stat:
-                    continue
-                for o in m["outcomes"]:
-                    # call your HTTP analysis endpoint
-                    payload = BetAnalysisInput(
-                        player_id    = int(o["description"]),  # or lookup if needed
-                        team_code    = game["home_team"],
-                        stat         = stat,
-                        line         = o["point"],
-                        opponent_abv = game["away_team"],
-                    )
-                    res = await client.post(ANALYSIS_URL, json=payload.model_dump())
-                    res.raise_for_status()
-                    analysis_json = res.text
+                    for o in m["outcomes"]:
+                        # 1) look up the numeric player_id by name
+                        row = await db_conn.fetchrow(
+                            "SELECT player_id FROM mlb_players WHERE long_name = $1",
+                            o["description"],
+                        )
+                        if not row:
+                            # no such player in your table → skip
+                            continue
 
-                    records.append((
-                        analysis_json,
-                        o["price"],
-                        game["commence_time"],
-                        tag
-                    ))
+                        pid = row["player_id"]
+
+                        # 2) build the payload with the real ID
+                        payload = BetAnalysisInput(
+                            player_id    = pid,
+                            team_code    = game["home_team"],
+                            stat         = stat,
+                            line         = o["point"],
+                            opponent_abv = game["away_team"],
+                        )
+
+                        resp = await client.post(ANALYSIS_URL, json=payload.model_dump())
+                        resp.raise_for_status()
+                        analysis_json = resp.text
+
+                        records.append((
+                            analysis_json,
+                            o["price"],
+                            game["commence_time"],
+                            f"{game['away_team']}@{game['home_team']}"
+                        ))
+
+                        if len(records) >= 20:
+                            break
                     if len(records) >= 20:
                         break
                 if len(records) >= 20:
                     break
-            if len(records) >= 20:
-                break
+
 
     if not records:
         print("No Underdog bets found for tomorrow.")
