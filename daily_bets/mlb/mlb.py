@@ -213,6 +213,8 @@ async def run(pool: DBPool):
                 logger.error(f"Error fetching tomorrow's MLB events: {e}")
                 return
 
+        Err("asdf")
+
         for event in events:
             logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
             game_dt = datetime.fromisoformat(
