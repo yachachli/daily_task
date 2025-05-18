@@ -2,12 +2,11 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
-from asyncpg import Pool
 import httpx
+from asyncpg import Pool
 from httpx._types import QueryParamTypes
 
 from daily_bets.logger import logger
-from daily_bets.utils import batch_calls
 from daily_bets.models import (
     BetAnalysis,
     BetAnalysisInput,
@@ -15,6 +14,7 @@ from daily_bets.models import (
     NflTeam,
     SportEvent,
 )
+from daily_bets.utils import batch_calls
 
 # For mapping keys -> "stat" strings
 MARKET_TO_STAT = {

@@ -1,7 +1,6 @@
 import asyncio
 
 # from daily_bets.db import db_pool
-
 from dotenv import load_dotenv
 
 load_dotenv()

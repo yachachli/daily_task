@@ -3,11 +3,11 @@ import os
 import typing as t
 from datetime import datetime, timedelta, timezone
 
-from asyncpg import Pool
 import httpx
-from httpx._types import QueryParamTypes
 from dateutil.parser import parse as parse_datetime
+from httpx._types import QueryParamTypes
 
+from daily_bets.db import DBPool
 from daily_bets.logger import logger
 from daily_bets.models import (
     BetAnalysis,
@@ -85,7 +85,7 @@ class NbaMap:
         return None
 
     @classmethod
-    async def from_db(cls, pool: Pool) -> t.Self:
+    async def from_db(cls, pool: DBPool) -> t.Self:
         [players, teams] = await asyncio.gather(
             NbaMap._load_nba_players_from_db(pool),
             NbaMap._load_nba_teams_from_db(pool),
@@ -94,7 +94,7 @@ class NbaMap:
         return cls(players, teams, team_name_to_abv)
 
     @staticmethod
-    async def _load_nba_players_from_db(pool: Pool):
+    async def _load_nba_players_from_db(pool: DBPool):
         query = """
             SELECT P.*, T.team_abv
             FROM nba_players as P
@@ -115,7 +115,7 @@ class NbaMap:
         return player_dict
 
     @staticmethod
-    async def _load_nba_teams_from_db(pool: Pool):
+    async def _load_nba_teams_from_db(pool: DBPool):
         query = """
             SELECT *
             FROM nba_teams
@@ -277,7 +277,7 @@ async def fetch_game_bets(
                 if stat_type is None:
                     logger.warning(f"Unknown market key {market.key=}")
                     continue
-                outcomes = market.outcomes                
+                outcomes = market.outcomes
                 backend_results.extend(
                     await batch_calls(
                         map(lambda o: (o, stat_type), outcomes),
@@ -312,7 +312,7 @@ async def fetch_sport(
     return events_list
 
 
-async def run(pool: Pool, stats: list[str]):
+async def run(pool: DBPool, stats: list[str]):
     logger.info("Starting NBA analysis")
     sport = "basketball_nba"
 
@@ -358,7 +358,9 @@ async def run(pool: Pool, stats: list[str]):
             home_team_abv = nba_map.team_abv(game.home_team)
             away_team_abv = nba_map.team_abv(game.away_team)
             if home_team_abv is None or away_team_abv is None:
-                logger.error(f"Could not get ABVs for game tag. Skipping this game's results.")
+                logger.error(
+                    "Could not get ABVs for game tag. Skipping this game's results."
+                )
                 continue
 
             # Format the game tag
@@ -385,7 +387,7 @@ async def run(pool: Pool, stats: list[str]):
                 "game_tag",
             ],
             records=list(
-                    map(
+                map(
                     lambda tup: (
                         tup[0].model_dump_json(),
                         tup[1],
@@ -394,6 +396,6 @@ async def run(pool: Pool, stats: list[str]):
                     ),
                     backend_results_with_tag,
                 )
-            ),  
+            ),
         )
         logger.info(res)
