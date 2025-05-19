@@ -318,7 +318,7 @@ async def run(pool: Pool, stats: list[str]):
 
     now = datetime.now(timezone.utc)
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=2) - timedelta(seconds=1)
+    day_end = day_start + timedelta(days=3) - timedelta(seconds=1)
 
     day_start_iso = day_start.isoformat().replace("+00:00", "Z")
     day_end_iso = day_end.isoformat().replace("+00:00", "Z")
