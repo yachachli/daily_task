@@ -9,6 +9,10 @@ on:
 jobs:
   run-analysis:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sport: [nba, mlb, nfl]
+    name: ${{ matrix.sport }}-analysis
     steps:
       - uses: actions/checkout@v4
 
@@ -35,4 +39,4 @@ jobs:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASS: ${{ secrets.DB_PASS }}
           DB_HOST: ${{ secrets.DB_HOST }}
-        run: uv run -m daily_bets
+        run: uv run -m daily_bets ${{ matrix.sport }}

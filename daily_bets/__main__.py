@@ -6,11 +6,11 @@ except ImportError:
     print("Failed to load `dotenv`, proceding with existing env vars")
 
 import asyncio
+import sys
 
 from daily_bets.db_pool import db_pool
-from daily_bets.logger import setup_logging
-from daily_bets.mlb import mlb
-from daily_bets.nba import nba
+from daily_bets.logger import setup_logging, logger
+from daily_bets.analysis import mlb, nba, nfl
 
 
 async def main():
@@ -22,8 +22,21 @@ async def main():
         print("Failed to create database pool.")
         return
 
-    # await nfl.run(pool)
-    _ = await asyncio.gather(mlb.run(pool), nba.run(pool))
+    if len(sys.argv) < 2:
+        logger.info("No arguments provided, running all analyses")
+        _ = await asyncio.gather(nfl.run(pool), mlb.run(pool), nba.run(pool))
+
+    match sys.argv[1]:
+        case "nfl":
+            await nfl.run(pool)
+        case "mlb":
+            await mlb.run(pool)
+        case "nba":
+            await nba.run(pool)
+        case _:
+            logger.error(
+                f"Invalid argument: {sys.argv[1]}. Expected: 'nfl', 'mlb', 'nba' or nothing to run all"
+            )
 
 
 if __name__ == "__main__":

@@ -2,119 +2,89 @@ import typing as t
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
-import msgspec
+import msgspec.json
 from dateutil.parser import parse as parse_datetime
+from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.db import mlb_db as db
+from daily_bets.db import nfl_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
-from daily_bets.errors import (
-    DecodeError,
-    HttpError,
-    NoPlayerFoundError,
-    NoTeamFoundError,
-)
+from daily_bets.errors import HttpError, NoPlayerFoundError, NoTeamFoundError
 from daily_bets.logger import logger
-from daily_bets.models import BetAnalysisInput
-from daily_bets.odds_api import (
-    Outcome,
-    SportEvent,
-    fetch_game,
-    fetch_tomorrow_events,
+from daily_bets.models import (
+    BetAnalysisInput,
 )
+from daily_bets.odds_api import Outcome, SportEvent, fetch_game, fetch_tomorrow_events
 from daily_bets.utils import batch_calls_result_async, normalize_name
 
-SPORT_KEY = "baseball_mlb"
+MARKET_TO_STAT = {
+    "player_field_goals": "field goals",
+    "player_kicking_points": "kicking points",
+    "player_pass_attempts": "pass attempts",
+    "player_pass_attempts_alternate": "pass attempts",
+    "player_pass_interceptions": "pass ints",
+    "player_pass_tds": "pass tds",
+    "player_pass_tds_alternate": "pass tds",
+    "player_pass_yds": "pass yards",
+    "player_pass_yds_alternate": "pass yards",
+    "player_pats": "extra points",
+    "player_reception_yds": "rec yards",
+    "player_receptions": "receptions",
+    "player_rush_attempts": "rush carries",
+    "player_rush_reception_yds": "rush + rec yards",
+    "player_rush_yds": "rush yards",
+    "player_sacks": "sacks",
+    "player_tds_over": "pass + rush + rec tds",
+    "player_anytime_td": "pass + rush + rec tds",
+    "player_reception_yds_alternate": "rec yards",
+    "player_rush_reception_yds_alternate": "rush + rec yards",
+    "player_rush_reception_tds_alternate": "rush + rec tds",
+    "player_rush_reception_tds": "rush + rec tds",
+    "player_pass_interceptions_alternate": "pass ints",
+    "player_pats_alternate": "extra points",
+    "player_rush_attempts_alternate": "rush carries",
+    "player_rush_yds_alternate": "rush yards",
+}
+
+SPORT_KEY = "americanfootball_nfl"
 REGION = "us_dfs"
 
-MARKET_TO_STAT = {
-    "batter_home_runs": "home runs",
-    "batter_hits": "hits",
-    "batter_rbis": "rbi",
-    "batter_hits_runs_rbis": "hits + rbi",
-}
 
-TEAM_NAME_TO_ABV = {
-    "Arizona Diamondbacks": "ARI",
-    "Atlanta Braves": "ATL",
-    "Baltimore Orioles": "BAL",
-    "Boston Red Sox": "BOS",
-    "Chicago Cubs": "CHC",
-    "Chicago White Sox": "CHW",
-    "Cincinnati Reds": "CIN",
-    "Cleveland Guardians": "CLE",
-    "Cleveland Indians": "CLE",
-    "Colorado Rockies": "COL",
-    "Detroit Tigers": "DET",
-    "Houston Astros": "HOU",
-    "Kansas City Royals": "KC",
-    "Los Angeles Angels": "LAA",
-    "Los Angeles Dodgers": "LAD",
-    "Miami Marlins": "MIA",
-    "Milwaukee Brewers": "MIL",
-    "Minnesota Twins": "MIN",
-    "New York Mets": "NYM",
-    "New York Yankees": "NYY",
-    "Oakland Athletics": "OAK",
-    "Athletics": "OAK",
-    "Philadelphia Phillies": "PHI",
-    "Pittsburgh Pirates": "PIT",
-    "San Diego Padres": "SD",
-    "San Francisco Giants": "SF",
-    "Seattle Mariners": "SEA",
-    "St. Louis Cardinals": "STL",
-    "Tampa Bay Rays": "TB",
-    "Texas Rangers": "TEX",
-    "Toronto Blue Jays": "TOR",
-    "Washington Nationals": "WAS",
-}
-
-
-class MlbMap:
-    _player_name_and_team_abv_to_player_id: dict[tuple[str, str | None], int]
+class NflMap:
+    _player_name_and_team_abv_to_player_id: dict[tuple[str, str], int]
     _team_name_to_abv: dict[str, str]
 
-    def __init__(
-        self, players: dict[tuple[str, str | None], int], teams: dict[str, str]
-    ):
+    def __init__(self, players: dict[tuple[str, str], int], teams: dict[str, str]):
         self._player_name_and_team_abv_to_player_id = players
         self._team_name_to_abv = teams
 
     @classmethod
     async def from_db(cls, pool: DBPool) -> t.Self:
         async with pool.acquire() as conn:
-            mlb_players = await db.mlb_players(conn)
-            mlb_teams = await db.mlb_teams(conn)
+            nfl_players = await db.nfl_players_with_team(conn)
+            nfl_teams = await db.nfl_teams(conn)
 
-        players: dict[tuple[str, str | None], int] = {}
-        for mlb_player in mlb_players:
+        players: dict[tuple[str, str], int] = {}
+        for nfl_player in nfl_players:
             assert (
-                normalize_name(mlb_player.long_name),
-                mlb_player.team_abv,
-            ) not in players, f"{mlb_player.long_name} {mlb_player.team_abv}"
+                normalize_name(nfl_player.name),
+                nfl_player.team_abv,
+            ) not in players, f"{nfl_player.name} {nfl_player.team_abv}"
 
-            players[(normalize_name(mlb_player.long_name), mlb_player.team_abv)] = (
-                mlb_player.player_id
+            players[(normalize_name(nfl_player.name), nfl_player.team_abv)] = (
+                nfl_player.id
             )
-        assert len(players) == len(mlb_players)
+        assert len(players) == len(nfl_players)
 
-        team_name_to_abv = {
-            normalize_name(f"{t.team_city} {t.team_name}"): t.team_abv
-            for t in mlb_teams
-        }
-        for k, v in TEAM_NAME_TO_ABV.items():
-            if k not in team_name_to_abv:
-                team_name_to_abv[normalize_name(k)] = v
+        team_name_to_abv = {normalize_name(t.name): t.team_code for t in nfl_teams}
 
         return cls(
             players,
             team_name_to_abv,
         )
 
-    def player_name_to_player_id(
-        self, player_name: str, team_abv: str | None
-    ) -> int | None:
+    def player_name_to_player_id(self, player_name: str, team_abv: str) -> int | None:
         return self._player_name_and_team_abv_to_player_id.get(
             (normalize_name(player_name), team_abv)
         )
@@ -124,20 +94,20 @@ class MlbMap:
 
 
 def do_analysis(
-    mlb_map: MlbMap,
+    nfl_map: NflMap,
     client: httpx.AsyncClient,
     event: SportEvent,
     outcome: Outcome,
     stat: str,
 ) -> ResultAsync[
-    db.MlbCopyAnalysisParams,
+    db.NflCopyAnalysisParams,
     NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
 ]:
     team_abv_player: str | None
     team_abv_opponent: str | None
 
-    team_abv_home = mlb_map.team_full_name_to_abv(event.home_team)
-    team_abv_away = mlb_map.team_full_name_to_abv(event.away_team)
+    team_abv_home = nfl_map.team_full_name_to_abv(event.home_team)
+    team_abv_away = nfl_map.team_full_name_to_abv(event.away_team)
 
     if not team_abv_home or not team_abv_away:
         return ErrAsync(
@@ -153,7 +123,7 @@ def do_analysis(
     )
 
     # figure out which team the player is on
-    player_id = mlb_map.player_name_to_player_id(
+    player_id = nfl_map.player_name_to_player_id(
         outcome.description,
         team_abv_home,
     )
@@ -161,7 +131,7 @@ def do_analysis(
         team_abv_player = team_abv_home
         team_abv_opponent = team_abv_away
     else:
-        player_id = mlb_map.player_name_to_player_id(
+        player_id = nfl_map.player_name_to_player_id(
             outcome.description,
             team_abv_away,
         )
@@ -185,7 +155,7 @@ def do_analysis(
     return (
         ResultAsync.from_coro(
             client.post(
-                Env.MLB_ANALYSIS_API_URL,
+                Env.NFL_ANALYSIS_API_URL,
                 content=msgspec.json.encode(payload),
                 headers={"Content-Type": "application/json"},
             ),
@@ -200,7 +170,7 @@ def do_analysis(
             lambda e: DecodeError(e),
         )
         .map(
-            lambda analysis: db.MlbCopyAnalysisParams(
+            lambda analysis: db.NflCopyAnalysisParams(
                 analysis=analysis,
                 price=outcome.price,
                 game_time=parse_datetime(event.commence_time),
@@ -208,64 +178,6 @@ def do_analysis(
             )
         )
     )
-
-
-# def get_analysis_params2(
-#     client: httpx.AsyncClient, tomorrow: date
-# ) -> ResultAsync[list[tuple[SportEvent, Outcome, str]], HttpError | DecodeError]:
-#     def filter_events(events: list[SportEvent]) -> list[SportEvent]:
-#         return [
-#             event
-#             for event in events
-#             if datetime.fromisoformat(event.commence_time.replace("Z", "+00:00")).date()
-#             - tomorrow
-#             <= timedelta(days=1)
-#         ]
-
-#     def fetch_games_for_events(
-#         events: list[SportEvent],
-#     ) -> ResultAsync[list[Game], HttpError | DecodeError]:
-#         return ResultAsync.from_coro(
-#             asyncio.gather(
-#                 *[
-#                     fetch_game(
-#                         client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()
-#                     )
-#                     for event in events
-#                 ]
-#             ),
-#             lambda e: HttpError(e),
-#         ).map(lambda games: [game.unwrap() for game in games if game.is_ok()])
-
-#     def create_event_game_pairs(
-#         events_and_games: tuple[list[SportEvent], list[Game]],
-#     ) -> list[tuple[SportEvent, Game]]:
-#         events, games = events_and_games
-#         return list(zip(events, games))
-
-#     def extract_params(
-#         event_game_pairs: list[tuple[SportEvent, Game]],
-#     ) -> list[tuple[SportEvent, Outcome, str]]:
-#         return [
-#             (event, outcome, stat)
-#             for event, game in event_game_pairs
-#             for bookmaker in game.bookmakers
-#             for market in bookmaker.markets
-#             if (stat := MARKET_TO_STAT.get(market.key))
-#             for outcome in market.outcomes
-#         ]
-
-#     return (
-#         fetch_tomorrow_events(client, SPORT_KEY)
-#         .map(filter_events)
-#         .and_then(
-#             lambda events: fetch_games_for_events(events).map(
-#                 lambda games: (events, games)
-#             )
-#         )
-#         .map(create_event_game_pairs)
-#         .map(extract_params)
-#     )
 
 
 async def get_analysis_params(
@@ -313,25 +225,19 @@ async def get_analysis_params(
 
 async def run(pool: DBPool):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    copy_params: list[db.MlbCopyAnalysisParams] = []
+    copy_params: list[db.NflCopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's MLB events: {tomorrow}")
 
     logger.info("Fetching MLB map from db")
-    mlb_map = await MlbMap.from_db(pool)
+    nfl_map = await NflMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, tomorrow)
-        logger.info(f"Found {len(analysis_params)} analysis params")
-        for event, outcome, stat in analysis_params:
-            print(
-                f"  {event.home_team} vs {event.away_team} {outcome.description} {stat} {outcome.point}"
-            )
 
         logger.info(f"Processing {len(analysis_params)} analysis params")
-        # fmt: off
         analysis_jsons = await batch_calls_result_async(
             [
-                (mlb_map, client, event, outcome, stat, )
+                (nfl_map, client, event, outcome, stat, )
                 for event, outcome, stat in analysis_params
             ],
             do_analysis,
