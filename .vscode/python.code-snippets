@@ -1,0 +1,13 @@
+{
+  "Bubble Result": {
+    "prefix": "?",
+    "body": [
+      "# fmt: off",
+      "match ${1:result}:",
+      "    case Ok(${2:value}): ...",
+      "    case Err() as e: ${3:return e}  # noqa: E701",
+      "# fmt: on"
+    ],
+    "description": "Bubble Result"
+  }
+}

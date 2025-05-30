@@ -14,5 +14,8 @@ wheels/
 logs/
 .DS_Store
 
-.vscode/
+.ruff_cache/
 
+schema.sql
+
+*.wasm

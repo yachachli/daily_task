@@ -1,0 +1,18 @@
+version: "2"
+plugins:
+  - name: python
+    wasm:
+      url: https://github.com/rayakame/sqlc-gen-better-python/releases/download/v0.4.3/sqlc-gen-better-python.wasm
+      sha256: c178ef76085ab4737a9a83f1147662ff0a9a24b8513405880fdfcde3ad30ca66
+sql:
+  - engine: "postgresql"
+    queries: "queries"
+    schema: "schema.sql"
+    codegen:
+      - out: "daily_bets/db"
+        plugin: python
+        options:
+          package: "daily_bets.db"
+          emit_init_file: true
+          sql_driver: "asyncpg"
+          model_type: "msgspec"

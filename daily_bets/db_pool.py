@@ -1,16 +1,11 @@
 import json
-from os import environ
 import typing
-from typing import TYPE_CHECKING
+from os import environ
 
 import asyncpg
 
-from daily_bets.logger import logger
-
-if TYPE_CHECKING:
-    type DBPool = asyncpg.Pool[asyncpg.Record]
-else:
-    DBPool = asyncpg.Pool
+DBPool = asyncpg.Pool[asyncpg.Record]
+DBConnection = asyncpg.Connection[asyncpg.Record]
 
 
 def encode_jsonb(data: typing.Any):
@@ -29,7 +24,7 @@ def decode_json(data: bytes):
     return json.loads(data.decode())
 
 
-async def init_connection(conn: asyncpg.Connection):
+async def init_connection(conn: DBConnection):
     await conn.set_type_codec(
         "jsonb",
         encoder=encode_jsonb,
@@ -47,17 +42,10 @@ async def init_connection(conn: asyncpg.Connection):
 
 
 async def db_pool():
-    logger.info("Creating database connection pool")
-
-    pool = await asyncpg.create_pool(
+    return await asyncpg.create_pool(
         database=environ["DB_NAME"],
         user=environ["DB_USER"],
         password=environ["DB_PASS"],
         host=environ["DB_HOST"],
         init=init_connection,
     )
-
-    if not pool:
-        raise Exception("Failed to create database pool.")
-
-    return pool

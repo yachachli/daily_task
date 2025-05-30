@@ -1,15 +1,22 @@
-from asyncpg import Pool
-from daily_bets.db import db_pool
 import asyncio
 
+from daily_bets.db_pool import DBPool, db_pool
 
-async def delete_nba(pool: Pool):
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+
+async def delete_nba(pool: DBPool):
     async with pool.acquire() as conn:
         await conn.execute("""
         DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';""")
 
 
-async def delete_nfl(pool: Pool):
+async def delete_nfl(pool: DBPool):
     async with pool.acquire() as conn:
         await conn.execute("""
         DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';""")
@@ -17,7 +24,11 @@ async def delete_nfl(pool: Pool):
 
 async def main():
     pool = await db_pool()
-    asyncio.gather(
+    if not pool:
+        print("Failed to create database pool.")
+        return
+
+    await asyncio.gather(
         delete_nba(pool),
         delete_nfl(pool),
     )
