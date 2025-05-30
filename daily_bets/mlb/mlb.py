@@ -1,10 +1,10 @@
 import typing as t
-from datetime import datetime, timedelta, timezone, date
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import msgspec
-from neverraise import Err, Ok, ErrAsync, ResultAsync
 from dateutil.parser import parse as parse_datetime
+from neverraise import Err, ErrAsync, Ok, ResultAsync
 
 from daily_bets.db import mlb_db
 from daily_bets.db_pool import DBPool
@@ -12,12 +12,12 @@ from daily_bets.env import Env
 from daily_bets.logger import logger
 from daily_bets.models import BetAnalysisInput
 from daily_bets.odds_api import (
-    fetch_game,
-    fetch_tomorrow_events,
+    DecodeError,
+    HttpError,
     Outcome,
     SportEvent,
-    HttpError,
-    DecodeError,
+    fetch_game,
+    fetch_tomorrow_events,
 )
 from daily_bets.utils import batch_calls_result_async, normalize_name
 

@@ -156,5 +156,9 @@ async def copy_analysis(
         (param.analysis, param.price, param.game_time, param.game_tag)
         for param in params
     ]
-    result = await conn.copy_records_to_table("v2_mlb_daily_bets", records=records)
+    result = await conn.copy_records_to_table(
+        "v2_mlb_daily_bets",
+        records=records,
+        columns=["analysis", "price", "game_time", "game_tag"],
+    )
     return int(result.split()[-1]) if result.split()[-1].isdigit() else 0

@@ -12,4 +12,3 @@ match divide(10, 0):
         print(result)
     case Err(error):
         print(error)
-

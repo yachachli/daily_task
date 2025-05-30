@@ -25,8 +25,9 @@ __all__: collections.abc.Sequence[str] = (
     "V3NflTeam",
 )
 
-import msgspec
 import typing
+
+import msgspec
 
 if typing.TYPE_CHECKING:
     import collections.abc

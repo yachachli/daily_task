@@ -7,6 +7,7 @@ import httpx
 from dateutil.parser import parse as parse_datetime
 from httpx._types import QueryParamTypes
 
+from daily_bets.db.models import NbaPlayer, NbaTeam
 from daily_bets.db_pool import DBPool
 from daily_bets.logger import logger
 from daily_bets.models import (
@@ -14,14 +15,11 @@ from daily_bets.models import (
     BetAnalysisInput,
 )
 from daily_bets.odds_api import (
-    fetch_game,
-    fetch_tomorrow_events,
+    Game,
     Outcome,
     SportEvent,
-    Game,
 )
 from daily_bets.utils import batch_calls, normalize_name
-from daily_bets.db.models import NbaPlayer, NbaTeam
 
 T = t.TypeVar("T")
 R = t.TypeVar("R")
@@ -321,7 +319,7 @@ async def run(pool: DBPool, stats: list[str]):
 
     now = datetime.now(timezone.utc)
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=2) - timedelta(seconds=1)
+    day_end = day_start + timedelta(days=3) - timedelta(seconds=1)
 
     day_start_iso = day_start.isoformat().replace("+00:00", "Z")
     day_end_iso = day_end.isoformat().replace("+00:00", "Z")
