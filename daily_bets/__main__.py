@@ -8,9 +8,9 @@ except ImportError:
 import asyncio
 import sys
 
-from daily_bets.db_pool import db_pool
-from daily_bets.logger import setup_logging, logger
 from daily_bets.analysis import mlb, nba, nfl
+from daily_bets.db_pool import db_pool
+from daily_bets.logger import logger, setup_logging
 
 
 async def main():

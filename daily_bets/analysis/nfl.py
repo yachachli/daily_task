@@ -237,7 +237,13 @@ async def run(pool: DBPool):
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
-                (nfl_map, client, event, outcome, stat, )
+                (
+                    nfl_map,
+                    client,
+                    event,
+                    outcome,
+                    stat,
+                )
                 for event, outcome, stat in analysis_params
             ],
             do_analysis,
