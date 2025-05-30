@@ -5,11 +5,11 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
-    "CopyAnalysisParams",
+    "MlbCopyAnalysisParams",
     "QueryResults",
-    "all_players",
-    "all_teams",
-    "copy_analysis",
+    "mlb_copy_analysis",
+    "mlb_players",
+    "mlb_teams",
 )
 
 import typing
@@ -43,23 +43,23 @@ if typing.TYPE_CHECKING:
 from daily_bets.db import models
 
 
-class CopyAnalysisParams(msgspec.Struct):
+class MlbCopyAnalysisParams(msgspec.Struct):
     analysis: str
-    price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    price: float
+    game_time: datetime.datetime
+    game_tag: str
 
 
-ALL_PLAYERS: typing.Final[str] = """-- name: AllPlayers :many
+MLB_COPY_ANALYSIS: typing.Final[str] = """-- name: MlbCopyAnalysis :copyfrom
+INSERT INTO v2_mlb_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
+"""
+
+MLB_PLAYERS: typing.Final[str] = """-- name: MlbPlayers :many
 SELECT id, player_id, long_name, team_abv, pos, height, weight, bat, throw, b_day, mlb_headshot, espn_headshot, espn_status, injury_description, injury_return FROM mlb_players
 """
 
-ALL_TEAMS: typing.Final[str] = """-- name: AllTeams :many
+MLB_TEAMS: typing.Final[str] = """-- name: MlbTeams :many
 SELECT team_abv, team_city, team_name, conference, division, rs, ra, wins, losses, run_diff FROM mlb_teams
-"""
-
-COPY_ANALYSIS: typing.Final[str] = """-- name: CopyAnalysis :copyfrom
-INSERT INTO v2_mlb_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
 
@@ -108,7 +108,18 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-def all_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:
+async def mlb_copy_analysis(
+    conn: ConnectionLike, *, params: collections.abc.Sequence[MlbCopyAnalysisParams]
+) -> int:
+    records = [
+        (param.analysis, param.price, param.game_time, param.game_tag)
+        for param in params
+    ]
+    result = await conn.copy_records_to_table("v2_mlb_daily_bets", records=records)
+    return int(result.split()[-1]) if result.split()[-1].isdigit() else 0
+
+
+def mlb_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:
     def _decode_hook(row: asyncpg.Record) -> models.MlbPlayer:
         return models.MlbPlayer(
             id=row[0],
@@ -128,10 +139,10 @@ def all_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:
             injury_return=row[14],
         )
 
-    return QueryResults[models.MlbPlayer](conn, ALL_PLAYERS, _decode_hook)
+    return QueryResults[models.MlbPlayer](conn, MLB_PLAYERS, _decode_hook)
 
 
-def all_teams(conn: ConnectionLike) -> QueryResults[models.MlbTeam]:
+def mlb_teams(conn: ConnectionLike) -> QueryResults[models.MlbTeam]:
     def _decode_hook(row: asyncpg.Record) -> models.MlbTeam:
         return models.MlbTeam(
             team_abv=row[0],
@@ -146,19 +157,4 @@ def all_teams(conn: ConnectionLike) -> QueryResults[models.MlbTeam]:
             run_diff=row[9],
         )
 
-    return QueryResults[models.MlbTeam](conn, ALL_TEAMS, _decode_hook)
-
-
-async def copy_analysis(
-    conn: ConnectionLike, *, params: collections.abc.Sequence[CopyAnalysisParams]
-) -> int:
-    records = [
-        (param.analysis, param.price, param.game_time, param.game_tag)
-        for param in params
-    ]
-    result = await conn.copy_records_to_table(
-        "v2_mlb_daily_bets",
-        records=records,
-        columns=["analysis", "price", "game_time", "game_tag"],
-    )
-    return int(result.split()[-1]) if result.split()[-1].isdigit() else 0
+    return QueryResults[models.MlbTeam](conn, MLB_TEAMS, _decode_hook)

@@ -6,14 +6,18 @@ import msgspec
 from dateutil.parser import parse as parse_datetime
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.db import mlb_db
+from daily_bets.db import mlb_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
+from daily_bets.errors import (
+    DecodeError,
+    HttpError,
+    NoPlayerFoundError,
+    NoTeamFoundError,
+)
 from daily_bets.logger import logger
 from daily_bets.models import BetAnalysisInput
 from daily_bets.odds_api import (
-    DecodeError,
-    HttpError,
     Outcome,
     SportEvent,
     fetch_game,
@@ -80,8 +84,8 @@ class MlbMap:
     @classmethod
     async def from_db(cls, pool: DBPool) -> t.Self:
         async with pool.acquire() as conn:
-            mlb_players = await mlb_db.all_players(conn)
-            mlb_teams = await mlb_db.all_teams(conn)
+            mlb_players = await db.mlb_players(conn)
+            mlb_teams = await db.mlb_teams(conn)
 
         players: dict[tuple[str, str | None], int] = {}
         for mlb_player in mlb_players:
@@ -119,12 +123,6 @@ class MlbMap:
         return self._team_name_to_abv.get(normalize_name(team_full_name))
 
 
-class NoTeamFoundError(Exception): ...
-
-
-class NoPlayerFoundError(Exception): ...
-
-
 def do_analysis(
     mlb_map: MlbMap,
     client: httpx.AsyncClient,
@@ -132,14 +130,9 @@ def do_analysis(
     outcome: Outcome,
     stat: str,
 ) -> ResultAsync[
-    mlb_db.CopyAnalysisParams,
+    db.MlbCopyAnalysisParams,
     NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
 ]:
-    game_tag = f"{event.away_team}@{event.home_team}"
-    logger.info(
-        f"    Handling outcome: {outcome.description} {stat} {outcome.point} {game_tag}"
-    )
-
     team_abv_player: str | None
     team_abv_opponent: str | None
 
@@ -153,6 +146,13 @@ def do_analysis(
             )
         )
 
+    game_tag = f"{team_abv_away}@{team_abv_home}"
+
+    logger.info(
+        f"    Handling outcome: {outcome.description} {stat} {outcome.point} {game_tag}"
+    )
+
+    # figure out which team the player is on
     player_id = mlb_map.player_name_to_player_id(
         outcome.description,
         team_abv_home,
@@ -181,6 +181,7 @@ def do_analysis(
         stat=stat,
         line=outcome.point,
     )
+
     return (
         ResultAsync.from_coro(
             client.post(
@@ -199,7 +200,7 @@ def do_analysis(
             lambda e: DecodeError(e),
         )
         .map(
-            lambda analysis: mlb_db.CopyAnalysisParams(
+            lambda analysis: db.MlbCopyAnalysisParams(
                 analysis=analysis,
                 price=outcome.price,
                 game_time=parse_datetime(event.commence_time),
@@ -312,7 +313,7 @@ async def get_analysis_params(
 
 async def run(pool: DBPool):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    copy_params: list[mlb_db.CopyAnalysisParams] = []
+    copy_params: list[db.MlbCopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's MLB events: {tomorrow}")
 
     logger.info("Fetching MLB map from db")
@@ -343,9 +344,8 @@ async def run(pool: DBPool):
                 case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
             # fmt: on
 
-    # bulk‐insert via Neon pool
     async with pool.acquire() as conn:
-        await conn.copy_records_to_table(
+        _ = await conn.copy_records_to_table(
             "v2_mlb_daily_bets",
             columns=["analysis", "price", "game_time", "game_tag"],
             records=[
@@ -354,4 +354,4 @@ async def run(pool: DBPool):
             ],
         )
         # await mlb_db.copy_analysis(conn, params=copy_params)
-    print(f"Inserted {len(copy_params)} records into v2_mlb_daily_bets")
+    print(f"Inserted {len(copy_params)} records")

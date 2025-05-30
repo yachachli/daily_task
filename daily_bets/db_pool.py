@@ -1,11 +1,16 @@
 import json
 import typing
+import typing as t
 from os import environ
 
 import asyncpg
 
-DBPool = asyncpg.Pool[asyncpg.Record]
-DBConnection = asyncpg.Connection[asyncpg.Record]
+if t.TYPE_CHECKING:
+    DBPool = asyncpg.Pool[asyncpg.Record]
+    DBConnection = asyncpg.Connection[asyncpg.Record]
+else:
+    DBPool = asyncpg.Pool
+    DBConnection = asyncpg.Connection
 
 
 def encode_jsonb(data: typing.Any):

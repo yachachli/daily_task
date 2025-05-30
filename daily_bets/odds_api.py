@@ -5,6 +5,7 @@ import msgspec
 from neverraise import ResultAsync
 
 from daily_bets.env import Env
+from daily_bets.errors import DecodeError, HttpError
 
 
 class SportEvent(msgspec.Struct, frozen=True):
@@ -47,12 +48,6 @@ class Game(msgspec.Struct, frozen=True):
     home_team: str
     away_team: str
     bookmakers: list[Bookmaker]
-
-
-class HttpError(Exception): ...
-
-
-class DecodeError(Exception): ...
 
 
 def fetch_tomorrow_events(

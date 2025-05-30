@@ -36,8 +36,3 @@ Run
 - [ ] fix Player Data response from analysis api
 - [ ] put api urls in .env
 - [ ] move stuff to "models" module
-
-
-## Errors
-
-- `asyncpg.exceptions._base.InterfaceError: cannot perform operation: another operation is in progress`

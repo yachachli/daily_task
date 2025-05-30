@@ -17,7 +17,6 @@ __all__: collections.abc.Sequence[str] = (
     "NflDailyBet",
     "V2MlbDailyBet",
     "V2NbaDailyBet",
-    "V2NbaDailyBetsTest",
     "V2NflDailyBet",
     "V3NflGame",
     "V3NflGameStat",
@@ -123,9 +122,9 @@ class NbaPlayer(msgspec.Struct):
     id: int
     name: str
     position: str | None
-    team_id: int | None
+    team_id: int
     player_pic: str | None
-    player_id: int | None
+    player_id: int
     injury: str | None
 
 
@@ -194,10 +193,10 @@ class NbaSeason(msgspec.Struct):
 
 class NbaTeam(msgspec.Struct):
     id: int
-    name: str | None
-    team_city: str | None
-    team_abv: str | None
-    conference: str | None
+    name: str
+    team_city: str
+    team_abv: str
+    conference: str
     ppg: float | None
     oppg: float | None
     wins: int | None
@@ -230,21 +229,12 @@ class V2MlbDailyBet(msgspec.Struct):
     id: int
     analysis: str
     created_at: datetime.datetime
-    price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    price: float
+    game_time: datetime.datetime
+    game_tag: str
 
 
 class V2NbaDailyBet(msgspec.Struct):
-    id: int
-    analysis: str
-    created_at: datetime.datetime
-    price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
-
-
-class V2NbaDailyBetsTest(msgspec.Struct):
     id: int
     analysis: str
     created_at: datetime.datetime
@@ -327,7 +317,7 @@ class V3NflPlayer(msgspec.Struct):
 class V3NflTeam(msgspec.Struct):
     id: int
     name: str
-    team_code: str | None
+    team_code: str
     wins: int
     losses: int
     ties: int

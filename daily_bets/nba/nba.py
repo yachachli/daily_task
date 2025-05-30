@@ -1,29 +1,29 @@
 import asyncio
-import os
 import typing as t
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
+import msgspec.json
 from dateutil.parser import parse as parse_datetime
-from httpx._types import QueryParamTypes
+from msgspec import DecodeError
+from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.db.models import NbaPlayer, NbaTeam
+from daily_bets.db import nba_db as db
 from daily_bets.db_pool import DBPool
+from daily_bets.env import Env
+from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError
 from daily_bets.logger import logger
 from daily_bets.models import (
-    BetAnalysis,
     BetAnalysisInput,
 )
 from daily_bets.odds_api import (
-    Game,
+    HttpError,
     Outcome,
     SportEvent,
+    fetch_game,
+    fetch_tomorrow_events,
 )
-from daily_bets.utils import batch_calls, normalize_name
-
-T = t.TypeVar("T")
-R = t.TypeVar("R")
-
+from daily_bets.utils import batch_calls_result_async, normalize_name
 
 MARKET_TO_STAT = {
     "player_assists": "assists",
@@ -50,40 +50,33 @@ MARKET_TO_STAT = {
     "player_turnovers_alternate": "turnovers",
 }
 
+SPORT_KEY = "basketball_nba"
+REGION = "us_dfs"
+
 
 class NbaMap:
-    players: dict[tuple[str, str], NbaPlayer]
-    """('harry giles iii', 'CHA') -> NbaPlayer"""
-    teams: dict[str, NbaTeam]
-    """'1' -> NbaTeam"""
-    team_name_to_abv: dict[str, str]
+    _player_name_team_abv_to_player: dict[tuple[str, str], db.NbaPlayersWithTeamRow]
+    """('harry giles iii', 'CHA') -> NbaPlayersWithTeamRow"""
+    _team_name_to_abv: dict[str, str]
     """'charlotte hornets' -> 'CHA'"""
 
     def __init__(
         self,
-        players: dict[tuple[str, str], NbaPlayer],
-        teams: dict[str, NbaTeam],
-        team_name_to_abv: dict[str, str],
+        players: dict[tuple[str, str], db.NbaPlayersWithTeamRow],
+        teams: dict[str, str],
     ):
-        self.players = players
-        self.teams = teams
-        self.team_name_to_abv = team_name_to_abv
+        self._player_name_team_abv_to_player = players
+        self._team_name_to_abv = teams
 
-    def team_abv(self, name: str) -> str | None:
-        return self.team_name_to_abv.get(normalize_name(name))
+    def team_full_name_to_abv(self, name: str) -> str | None:
+        return self._team_name_to_abv.get(normalize_name(name))
 
-    def player(self, name: str, team_abv: str) -> NbaPlayer | None:
-        return self.players.get((normalize_name(name), team_abv))
-
-    def player_with_unknown_team(
-        self, name: str, team_abvs: list[str]
-    ) -> tuple[NbaPlayer, str] | None:
-        for team_abv in team_abvs:
-            player = self.player(name, team_abv)
-            if player is not None and player.team_abv == team_abv:
-                return player, team_abv
-
-        return None
+    def player_name_to_player_id(
+        self, name: str, team_abv: str
+    ) -> db.NbaPlayersWithTeamRow | None:
+        return self._player_name_team_abv_to_player.get(
+            (normalize_name(name), team_abv)
+        )
 
     @classmethod
     async def from_db(cls, pool: DBPool) -> t.Self:
@@ -91,312 +84,205 @@ class NbaMap:
             NbaMap._load_nba_players_from_db(pool),
             NbaMap._load_nba_teams_from_db(pool),
         )
-        team_name_to_abv = NbaMap._build_nba_team_fullname_map(teams)
-        return cls(players, teams, team_name_to_abv)
+        return cls(players, teams)
 
     @staticmethod
     async def _load_nba_players_from_db(pool: DBPool):
-        query = """
-            SELECT P.*, T.team_abv
-            FROM nba_players as P
-            LEFT JOIN nba_teams T on P.team_id = T.id"""
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query)
+            players = await db.nba_players_with_team(conn)
 
-            player_dict: dict[tuple[str, str], NbaPlayer] = {}
-            for row in rows:
-                row = dict(row)
-                if row["team_id"] is None or row["team_abv"] is None:
-                    logger.warning(f"Skipping player with missing team info: {row}")
-                    continue
-                name = normalize_name(row["name"])
-                abv = row["team_abv"]
-                player_dict[(name, abv)] = NbaPlayer.model_validate(row)
+        player_dict: dict[tuple[str, str], db.NbaPlayersWithTeamRow] = {}
+        for player in players:
+            name = normalize_name(player.name)
+            abv = player.team_abv
+            player_dict[(name, abv)] = player
 
         return player_dict
 
     @staticmethod
-    async def _load_nba_teams_from_db(pool: DBPool):
-        query = """
-            SELECT *
-            FROM nba_teams
-        """
+    async def _load_nba_teams_from_db(pool: DBPool) -> dict[str, str]:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query)
+            teams = await db.nba_teams(conn)
 
-            teams_dict: dict[str, NbaTeam] = {}
-            for row in rows:
-                row = dict(row)
-                t_id = row["id"]
-                teams_dict[t_id] = NbaTeam.model_validate(row)
+        team_name_to_abv = {
+            normalize_name(f"{t.team_city} {t.name}"): t.team_abv for t in teams
+        }
 
-        return teams_dict
-
-    @staticmethod
-    def _build_nba_team_fullname_map(teams_dict: dict[str, NbaTeam]):
-        full_map: dict[str, str] = {}
-        for _, team in teams_dict.items():
-            full_team_str = normalize_name(f"{team.team_city} {team.name}")
-            full_map[full_team_str] = team.team_abv
-        return full_map
+        return team_name_to_abv
 
 
-async def analyze_bet(
-    client: httpx.AsyncClient,
-    outcome: Outcome,
-    home_team_abv: str,
-    away_team_abv: str,
-    stat_type: str,
+def do_analysis(
     nba_map: NbaMap,
-    analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]],
-):
-    # player_name_raw = outcome.description
-    # name = normalize_name(player_name_raw)
-    #
-    # player = nba_player_dict.get(name)
-    player_and_abv = nba_map.player_with_unknown_team(
-        outcome.description, [home_team_abv, away_team_abv]
-    )
-    if not player_and_abv:
-        logger.error(
-            f"Player not found in DB: {outcome.description} {[home_team_abv, away_team_abv]}"
-        )
-        return None
-
-    line = outcome.point
-    price = outcome.price
-
-    bet_key = (outcome.description, outcome.price, outcome.point)
-    if bet_key in analysis_cache:
-        logger.debug(f"Found existing bet with key {bet_key=}. Skipping analysis")
-        return None
-
-    player, team_abv = player_and_abv
-    if team_abv == home_team_abv:
-        opponent_abv = away_team_abv
-    else:
-        opponent_abv = home_team_abv
-
-    req = BetAnalysisInput(
-        player_id=player.player_id,
-        team_code=team_abv,
-        stat=stat_type,
-        line=line,
-        opponent_abv=opponent_abv,
-    )
-
-    logger.info(f"Calling backend for {outcome.description}: {req.model_dump()}")
-
-    api_url = os.environ["NBA_ANALYSIS_API_URL"]
-    headers = {"Content-Type": "application/json"}
-    r = await client.post(api_url, json=req.model_dump(), headers=headers)
-    if r.is_error:
-        logger.error(f"analysis api error {r.status_code} {r.text}")
-        return None
-
-    response_data = r.json()
-
-    bet_analysis = BetAnalysis.model_validate(response_data)
-
-    # if the analysis doesn't match, then we don't want users to be able to see the bet
-    ou_outcome_normalized = outcome.name.lower()
-    ou_ours_normalized = (bet_analysis.over_under or "").lower()
-    if ou_outcome_normalized != ou_ours_normalized:
-        logger.debug(
-            f"Analysis doesn't match expected: {ou_outcome_normalized}, ours: {ou_ours_normalized}"
-        )
-        return None
-
-    bet_analysis = BetAnalysis.model_validate(response_data)
-
-    analysis_cache[bet_key] = (bet_analysis, price)
-    return bet_analysis, price
-
-
-# TODO: fetch games in parallel
-async def fetch_game_bets(
     client: httpx.AsyncClient,
     event: SportEvent,
-    nba_map: NbaMap,
-    stats: list[str],
-):
-    logger.debug(
-        f"{event.sport_key} | {stats} | {event.away_team} @ {event.home_team} | commence_time={event.commence_time} | event={event}"
-    )
-    if (home_team_abv := nba_map.team_abv(event.home_team)) is None:
-        logger.error(f"Team not found {event.home_team} in db")
-        return None
-    if (away_team_abv := nba_map.team_abv(event.away_team)) is None:
-        logger.error(f"Team not found {event.away_team} in db")
-        return None
+    outcome: Outcome,
+    stat: str,
+) -> ResultAsync[
+    db.NbaCopyAnalysisParams,
+    NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
+]:
+    team_abv_player: str | None
+    team_abv_opponent: str | None
 
-    single_odds_url = f"https://api.the-odds-api.com/v4/sports/{event.sport_key}/events/{event.id}/odds"
-    odds_params = {
-        "apiKey": os.environ["API_KEY"],
-        "regions": "us_dfs",  # or "us"
-        "markets": ",".join(stats),
-        "oddsFormat": "decimal",
-    }
+    team_abv_home = nba_map.team_full_name_to_abv(event.home_team)
+    team_abv_away = nba_map.team_full_name_to_abv(event.away_team)
 
-    resp_odds = await client.get(single_odds_url, params=odds_params)
-    if resp_odds.is_error:
-        return None
-
-    odds_data = resp_odds.json()
-
-    game = Game.model_validate(odds_data)
-    logger.info(f"{game=}")
-
-    backend_results: list[tuple[BetAnalysis, float] | None | Exception] = []
-
-    # (desc, price, stat) -> (BetAnalysis, price)
-    analysis_cache: dict[tuple[str, float, float], tuple[BetAnalysis, float]] = {}
-
-    def analyze_bet_inner(outcome: Outcome, stat: str):
-        try:
-            return analyze_bet(
-                client,
-                outcome,
-                home_team_abv,
-                away_team_abv,
-                stat,
-                nba_map,
-                analysis_cache,
+    if not team_abv_home or not team_abv_away:
+        return ErrAsync(
+            NoTeamFoundError(
+                f"Not able to find team {event.home_team!r} {team_abv_home!r} or {event.away_team!r} {team_abv_away!r}"
             )
-        except Exception as e:
-            logger.error(f"Error running analysis: {e}", exc_info=True)
-            raise e
+        )
+
+    game_tag = f"{team_abv_away}@{team_abv_home}"
 
     logger.info(
-        f"Running analysis {sum(len(bookmaker.markets) for bookmaker in game.bookmakers)} times"
+        f"    Handling outcome: {outcome.description} {stat} {outcome.point} {game_tag}"
     )
 
-    async with httpx.AsyncClient(timeout=100) as client:
-        for bookmaker in game.bookmakers:
-            for market in bookmaker.markets:
-                stat_type = MARKET_TO_STAT.get(market.key)
-                if stat_type is None:
-                    logger.warning(f"Unknown market key {market.key=}")
-                    continue
-                outcomes = market.outcomes
-                backend_results.extend(
-                    await batch_calls(
-                        map(lambda o: (o, stat_type), outcomes),
-                        analyze_bet_inner,
-                        5,
-                    )
-                )
-
-    results_filtered = [
-        res
-        for res in backend_results
-        if res is not None and not isinstance(res, Exception)
-    ]
-
-    logger.info(f"Filtered {len(backend_results)} -> {len(results_filtered)}")
-    return results_filtered, game
-
-
-async def fetch_sport(
-    client: httpx.AsyncClient, sport: str, url: str, params: QueryParamTypes
-):
-    resp = await client.get(url, params=params)
-    resp.raise_for_status()
-    events_list = [SportEvent(**data) for data in resp.json()]
-
-    if not events_list:
-        logger.warning(f"No {sport} events found in this date range.")
+    # figure out which team the player is on
+    player = nba_map.player_name_to_player_id(
+        outcome.description,
+        team_abv_home,
+    )
+    if player:
+        team_abv_player = team_abv_home
+        team_abv_opponent = team_abv_away
     else:
-        logger.info(f"Found {len(events_list)} {sport} events.")
-        # Tag each event with the sport
-
-    return events_list
-
-
-async def run(pool: DBPool, stats: list[str]):
-    logger.info("Starting NBA analysis")
-    sport = "basketball_nba"
-
-    now = datetime.now(timezone.utc)
-    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=3) - timedelta(seconds=1)
-
-    day_start_iso = day_start.isoformat().replace("+00:00", "Z")
-    day_end_iso = day_end.isoformat().replace("+00:00", "Z")
-    async with httpx.AsyncClient(timeout=30) as client:
-        get_events_url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
-        params_events = {
-            "apiKey": os.environ["API_KEY"],
-            "commenceTimeFrom": day_start_iso,
-            "commenceTimeTo": day_end_iso,
-        }
-        logger.info(f"Fetching events from {day_start_iso} to {day_end_iso}")
-        all_events = await fetch_sport(client, sport, get_events_url, params_events)
-        for event in all_events:
-            logger.info(f"  {event}")
-
-    if not all_events:
-        logger.error(
-            f"No events at all for NBA between {day_start_iso} and {day_end_iso}. Exiting."
+        player = nba_map.player_name_to_player_id(
+            outcome.description,
+            team_abv_away,
         )
-        return
-    else:
-        logger.info(f"Got {len(all_events)} events")
+        if not player:
+            return ErrAsync(
+                NoPlayerFoundError(
+                    f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
+                )
+            )
 
-    logger.info("Building nba map")
+        team_abv_player = team_abv_away
+        team_abv_opponent = team_abv_home
+
+    payload = BetAnalysisInput(
+        player_id=player.player_id,
+        team_code=team_abv_player,
+        opponent_abv=team_abv_opponent,
+        stat=stat,
+        line=outcome.point,
+    )
+
+    return (
+        ResultAsync.from_coro(
+            client.post(
+                Env.NBA_ANALYSIS_API_URL,
+                content=msgspec.json.encode(payload),
+                headers={"Content-Type": "application/json"},
+            ),
+            lambda e: HttpError(e),
+        )
+        .try_catch(
+            lambda res: res.raise_for_status(),
+            lambda e: HttpError(e),
+        )
+        .try_catch(
+            lambda res: res.text,
+            lambda e: DecodeError(e),
+        )
+        .map(
+            lambda analysis: db.NbaCopyAnalysisParams(
+                analysis=analysis,
+                price=outcome.price,
+                game_time=parse_datetime(event.commence_time),
+                game_tag=game_tag,
+            )
+        )
+    )
+
+
+async def get_analysis_params(
+    client: httpx.AsyncClient, tomorrow: date
+) -> list[tuple[SportEvent, Outcome, str]]:
+    params: set[tuple[SportEvent, Outcome, str]] = set()
+
+    match await fetch_tomorrow_events(client, SPORT_KEY):
+        case Ok(events):
+            ...
+        case Err() as e:
+            logger.error(f"Error fetching tomorrow's MLB events: {e!r}")
+            return []
+
+    for event in events:
+        logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
+        game_dt = datetime.fromisoformat(
+            event.commence_time.replace("Z", "+00:00")
+        ).date()
+        if game_dt - tomorrow > timedelta(days=1):
+            continue
+
+        # fmt: off
+        match await fetch_game(client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()): 
+            case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
+            case Err() as e:
+                logger.error(f"Error fetching game: {e!r}")
+                return []
+        # fmt: on
+
+        for bookmaker in game.bookmakers:
+            logger.info(
+                f"    Bookmaker: {bookmaker.title} markets {len(bookmaker.markets)}"
+            )
+            for market in bookmaker.markets:
+                logger.info(f"      Market: {market.key}")
+                stat = MARKET_TO_STAT.get(market.key)
+                if not stat:
+                    continue
+                for outcome in market.outcomes:
+                    params.add((event, outcome, stat))
+
+    return list(params)
+
+
+async def run(pool: DBPool):
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    copy_params: list[db.NbaCopyAnalysisParams] = []
+    logger.info(f"Fetching tomorrow's NBA events: {tomorrow}")
+
+    logger.info("Fetching NBA map from db")
     nba_map = await NbaMap.from_db(pool)
 
-    all_games: list[Game] = []
-    backend_results_with_tag: list[tuple[BetAnalysis, float, datetime, str]] = []
-
-    logger.info(f"Now fetching single-event odds for {len(all_events)} events...")
-    async with httpx.AsyncClient(timeout=30) as client:
-        for event in all_events:
-            res = await fetch_game_bets(client, event, nba_map, stats)
-            if res is None:
-                continue
-            backend_results_batch, game = res
-            home_team_abv = nba_map.team_abv(game.home_team)
-            away_team_abv = nba_map.team_abv(game.away_team)
-            if home_team_abv is None or away_team_abv is None:
-                logger.error(
-                    "Could not get ABVs for game tag. Skipping this game's results."
-                )
-                continue
-
-            # Format the game tag
-            game_tag = f"{away_team_abv}@{home_team_abv}".upper()  # Format as AWAY@HOME
-
-            # Then extend with the game_tag
-            backend_results_with_tag.extend(
-                (bet, price, parse_datetime(game.commence_time), game_tag)
-                for bet, price in backend_results_batch
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        analysis_params = await get_analysis_params(client, tomorrow)
+        logger.info(f"Found {len(analysis_params)} analysis params")
+        for event, outcome, stat in analysis_params:
+            print(
+                f"  {event.home_team} vs {event.away_team} {outcome.description} {stat} {outcome.point}"
             )
-            all_games.append(game)
 
-    logger.info(f"Got {len(all_games)} odds data events")
-
-    logger.info(f"Got {len(backend_results_with_tag)} analysis results")
+        logger.info(f"Processing {len(analysis_params)} analysis params")
+        # fmt: off
+        analysis_jsons = await batch_calls_result_async(
+            [
+                (nba_map, client, event, outcome, stat, )
+                for event, outcome, stat in analysis_params
+            ],
+            do_analysis,
+            batch_size=10,
+        )
+        for res in analysis_jsons:
+            # fmt: off
+            match res:
+                case Ok(analysis_params): copy_params.append(analysis_params)  # noqa: E701
+                case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
+            # fmt: on
 
     async with pool.acquire() as conn:
-        res = await conn.copy_records_to_table(
+        _ = await conn.copy_records_to_table(
             "v2_nba_daily_bets",
-            columns=[
-                "analysis",
-                "price",
-                "game_time",
-                "game_tag",
+            columns=["analysis", "price", "game_time", "game_tag"],
+            records=[
+                (param.analysis, param.price, param.game_time, param.game_tag)
+                for param in copy_params
             ],
-            records=list(
-                map(
-                    lambda tup: (
-                        tup[0].model_dump_json(),
-                        tup[1],
-                        tup[2],
-                        tup[3],
-                    ),
-                    backend_results_with_tag,
-                )
-            ),
         )
-        logger.info(res)
+        # await mlb_db.copy_analysis(conn, params=copy_params)
+    print(f"Inserted {len(copy_params)} records")
