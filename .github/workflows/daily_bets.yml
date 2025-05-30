@@ -1,9 +1,9 @@
-name: Daily MLB Betting Analysis
+name: Daily Bets Analysis
 
 on:
   schedule:
     # 5 AM Pacific / 13 UTC
-    - cron: '0 13 * * *'
+    - cron: "0 13 * * *"
   workflow_dispatch:
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version-file: ".python-version"
-      
+
       - name: Install the project
         run: uv sync --locked --all-extras --dev
       # - name: Install deps
@@ -30,12 +30,12 @@ jobs:
       #     pip install asyncpg httpx pydantic python-dotenv
       #     pip install -e .
 
-      - name: Run MLB analysis
+      - name: Run Analysis
         env:
-          API_KEY:               ${{ secrets.API_KEY }}
-          MLB_ANALYSIS_API_URL:  ${{ secrets.MLB_ANALYSIS_API_URL }}
-          DB_NAME:               ${{ secrets.DB_NAME }}
-          DB_USER:               ${{ secrets.DB_USER }}
-          DB_PASS:               ${{ secrets.DB_PASS }}
-          DB_HOST:               ${{ secrets.DB_HOST }}
+          API_KEY: ${{ secrets.API_KEY }}
+          MLB_ANALYSIS_API_URL: ${{ secrets.MLB_ANALYSIS_API_URL }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
         run: python -m daily_bets

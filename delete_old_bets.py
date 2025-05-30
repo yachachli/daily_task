@@ -21,6 +21,11 @@ async def delete_nfl(pool: DBPool):
         _ = await conn.execute("""
         DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';""")
 
+async def delete_mlb(pool: DBPool):
+    async with pool.acquire() as conn:
+        _ = await conn.execute("""
+        DELETE FROM v2_mlb_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';""")
+
 
 async def main():
     pool = await db_pool()
