@@ -1,17 +1,24 @@
 import typing as t
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 
 import httpx
 import msgspec
 from neverraise import Err, Ok, ErrAsync, ResultAsync
 from dateutil.parser import parse as parse_datetime
 
-from daily_bets.db import mlb
+from daily_bets.db import mlb_db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
 from daily_bets.logger import logger
 from daily_bets.models import BetAnalysisInput
-from daily_bets.odds_api import fetch_game, fetch_tomorrow_events, Outcome, SportEvent
+from daily_bets.odds_api import (
+    fetch_game,
+    fetch_tomorrow_events,
+    Outcome,
+    SportEvent,
+    HttpError,
+    DecodeError,
+)
 from daily_bets.utils import batch_calls_result_async, normalize_name
 
 SPORT_KEY = "baseball_mlb"
@@ -73,8 +80,8 @@ class MlbMap:
     @classmethod
     async def from_db(cls, pool: DBPool) -> t.Self:
         async with pool.acquire() as conn:
-            mlb_players = await mlb.all_players(conn)
-            mlb_teams = await mlb.all_teams(conn)
+            mlb_players = await mlb_db.all_players(conn)
+            mlb_teams = await mlb_db.all_teams(conn)
 
         players: dict[tuple[str, str | None], int] = {}
         for mlb_player in mlb_players:
@@ -118,23 +125,21 @@ class NoTeamFoundError(Exception): ...
 class NoPlayerFoundError(Exception): ...
 
 
-class HttpError(Exception): ...
-
-
-class DecodeError(Exception): ...
-
-
-def handle_outcome(
+def do_analysis(
     mlb_map: MlbMap,
+    client: httpx.AsyncClient,
     event: SportEvent,
     outcome: Outcome,
     stat: str,
-    client: httpx.AsyncClient,
-    # ) -> tuple[str, float] | None:
 ) -> ResultAsync[
-    tuple[str, float], NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError
+    mlb_db.CopyAnalysisParams,
+    NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
 ]:
-    logger.info(f"    Handling outcome: {outcome.description} {stat} {outcome.point}")
+    game_tag = f"{event.away_team}@{event.home_team}"
+    logger.info(
+        f"    Handling outcome: {outcome.description} {stat} {outcome.point} {game_tag}"
+    )
+
     team_abv_player: str | None
     team_abv_opponent: str | None
 
@@ -193,85 +198,160 @@ def handle_outcome(
             lambda res: res.text,
             lambda e: DecodeError(e),
         )
-        .map(lambda text: (text, outcome.price))
+        .map(
+            lambda analysis: mlb_db.CopyAnalysisParams(
+                analysis=analysis,
+                price=outcome.price,
+                game_time=parse_datetime(event.commence_time),
+                game_tag=game_tag,
+            )
+        )
     )
+
+
+# def get_analysis_params2(
+#     client: httpx.AsyncClient, tomorrow: date
+# ) -> ResultAsync[list[tuple[SportEvent, Outcome, str]], HttpError | DecodeError]:
+#     def filter_events(events: list[SportEvent]) -> list[SportEvent]:
+#         return [
+#             event
+#             for event in events
+#             if datetime.fromisoformat(event.commence_time.replace("Z", "+00:00")).date()
+#             - tomorrow
+#             <= timedelta(days=1)
+#         ]
+
+#     def fetch_games_for_events(
+#         events: list[SportEvent],
+#     ) -> ResultAsync[list[Game], HttpError | DecodeError]:
+#         return ResultAsync.from_coro(
+#             asyncio.gather(
+#                 *[
+#                     fetch_game(
+#                         client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()
+#                     )
+#                     for event in events
+#                 ]
+#             ),
+#             lambda e: HttpError(e),
+#         ).map(lambda games: [game.unwrap() for game in games if game.is_ok()])
+
+#     def create_event_game_pairs(
+#         events_and_games: tuple[list[SportEvent], list[Game]],
+#     ) -> list[tuple[SportEvent, Game]]:
+#         events, games = events_and_games
+#         return list(zip(events, games))
+
+#     def extract_params(
+#         event_game_pairs: list[tuple[SportEvent, Game]],
+#     ) -> list[tuple[SportEvent, Outcome, str]]:
+#         return [
+#             (event, outcome, stat)
+#             for event, game in event_game_pairs
+#             for bookmaker in game.bookmakers
+#             for market in bookmaker.markets
+#             if (stat := MARKET_TO_STAT.get(market.key))
+#             for outcome in market.outcomes
+#         ]
+
+#     return (
+#         fetch_tomorrow_events(client, SPORT_KEY)
+#         .map(filter_events)
+#         .and_then(
+#             lambda events: fetch_games_for_events(events).map(
+#                 lambda games: (events, games)
+#             )
+#         )
+#         .map(create_event_game_pairs)
+#         .map(extract_params)
+#     )
+
+
+async def get_analysis_params(
+    client: httpx.AsyncClient, tomorrow: date
+) -> list[tuple[SportEvent, Outcome, str]]:
+    params: set[tuple[SportEvent, Outcome, str]] = set()
+
+    match await fetch_tomorrow_events(client, SPORT_KEY):
+        case Ok(events):
+            ...
+        case Err() as e:
+            logger.error(f"Error fetching tomorrow's MLB events: {e!r}")
+            return []
+
+    for event in events:
+        logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
+        game_dt = datetime.fromisoformat(
+            event.commence_time.replace("Z", "+00:00")
+        ).date()
+        if game_dt - tomorrow > timedelta(days=1):
+            continue
+
+        # fmt: off
+        match await fetch_game(client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()): 
+            case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
+            case Err() as e:
+                logger.error(f"Error fetching game: {e!r}")
+                return []
+        # fmt: on
+
+        for bookmaker in game.bookmakers:
+            logger.info(
+                f"    Bookmaker: {bookmaker.title} markets {len(bookmaker.markets)}"
+            )
+            for market in bookmaker.markets:
+                logger.info(f"      Market: {market.key}")
+                stat = MARKET_TO_STAT.get(market.key)
+                if not stat:
+                    continue
+                for outcome in market.outcomes:
+                    params.add((event, outcome, stat))
+
+    return list(params)
 
 
 async def run(pool: DBPool):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    records: list[tuple[str, float, datetime, str]] = []
+    copy_params: list[mlb_db.CopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's MLB events: {tomorrow}")
 
     logger.info("Fetching MLB map from db")
     mlb_map = await MlbMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        match await fetch_tomorrow_events(client, SPORT_KEY):
-            case Ok(events):
-                logger.info(f"Fetched {len(events)} events")
-            case Err(e):
-                logger.error(f"Error fetching tomorrow's MLB events: {e}")
-                return
+        analysis_params = await get_analysis_params(client, tomorrow)
+        logger.info(f"Found {len(analysis_params)} analysis params")
+        for event, outcome, stat in analysis_params:
+            print(
+                f"  {event.home_team} vs {event.away_team} {outcome.description} {stat} {outcome.point}"
+            )
 
-        Err("asdf")
-
-        for event in events:
-            logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
-            game_dt = datetime.fromisoformat(
-                event.commence_time.replace("Z", "+00:00")
-            ).date()
-            if game_dt - tomorrow > timedelta(days=1):
-                continue
-
-            match await fetch_game(
-                client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()
-            ):
-                case Ok(game):
-                    logger.info(
-                        f"Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}"
-                    )
-                case Err() as e:
-                    logger.error(f"Error fetching game: {e}")
-                    return
-
-            tag = f"{event.away_team}@{event.home_team}"
-
-            for bookmaker in game.bookmakers:
-                logger.info(
-                    f"Bookmaker: {bookmaker.title} markets {len(bookmaker.markets)}"
-                )
-                for market in bookmaker.markets:
-                    logger.info(f"  Market: {market.key}")
-                    stat = MARKET_TO_STAT.get(market.key)
-                    if not stat:
-                        continue
-                    analysis_jsons = await batch_calls_result_async(
-                        [
-                            (mlb_map, event, outcome, stat, client)
-                            for outcome in market.outcomes
-                        ],
-                        handle_outcome,
-                        batch_size=10,
-                    )
-                    for res in analysis_jsons:
-                        match res:
-                            case Ok((analysis_json, price)):
-                                records.append(
-                                    (
-                                        analysis_json,
-                                        price,
-                                        parse_datetime(event.commence_time),
-                                        tag,
-                                    )
-                                )
-                            case Err(e):
-                                logger.error(f"Error handling outcome: {e}")
+        logger.info(f"Processing {len(analysis_params)} analysis params")
+        # fmt: off
+        analysis_jsons = await batch_calls_result_async(
+            [
+                (mlb_map, client, event, outcome, stat, )
+                for event, outcome, stat in analysis_params
+            ],
+            do_analysis,
+            batch_size=10,
+        )
+        for res in analysis_jsons:
+            # fmt: off
+            match res:
+                case Ok(analysis_params): copy_params.append(analysis_params)  # noqa: E701
+                case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
+            # fmt: on
 
     # bulk‐insert via Neon pool
     async with pool.acquire() as conn:
         await conn.copy_records_to_table(
             "v2_mlb_daily_bets",
             columns=["analysis", "price", "game_time", "game_tag"],
-            records=records,
+            records=[
+                (param.analysis, param.price, param.game_time, param.game_tag)
+                for param in copy_params
+            ],
         )
-    print(f"Inserted {len(records)} records into v2_mlb_daily_bets")
+        # await mlb_db.copy_analysis(conn, params=copy_params)
+    print(f"Inserted {len(copy_params)} records into v2_mlb_daily_bets")

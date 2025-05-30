@@ -67,6 +67,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "asyncpg" },
+    { name = "asyncpg-stubs" },
     { name = "httpx" },
     { name = "msgspec" },
     { name = "neverraise" },
@@ -85,9 +86,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "asyncpg-stubs", specifier = ">=0.30.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "msgspec", specifier = ">=0.19.0" },
-    { name = "neverraise", specifier = "==0.1.1" },
+    { name = "neverraise", specifier = "==0.1.2" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
@@ -163,11 +165,11 @@ wheels = [
 
 [[package]]
 name = "neverraise"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/75/e0/c2a08c1be40364bd2d17dd1d911d716464bbf96d0ae2a615c74ded1f0a98/neverraise-0.1.1.tar.gz", hash = "sha256:61f2ba66d7e49fafacfdf3ede6153045750b80e7cc9af40d07eb9b32fc47ff1c", size = 18602 }
+sdist = { url = "https://files.pythonhosted.org/packages/85/98/12e38ea95ab62e4c223fbd693ef18f9a09a72d977b15605a14af91f9f285/neverraise-0.1.2.tar.gz", hash = "sha256:1096d0c54d77add26c0e289ffe70b97cfe42d513e4c98f117f2f241ccf77fac3", size = 18726 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/68/b67e87051c4eac679b70fce11764334350385e3cb5d05de42875b4500588/neverraise-0.1.1-py3-none-any.whl", hash = "sha256:c001c4ae54c0854001ab603e7fe091bdbe4cfd46390de7ee8aaf9ad7770a1592", size = 9747 },
+    { url = "https://files.pythonhosted.org/packages/71/32/f2ad54b58b2cb6494493d6ecb3c4b02c8825f24362aae55d72d1ad9a9281/neverraise-0.1.2-py3-none-any.whl", hash = "sha256:95150a64ae87404863ade4071232e104f076a60510588af31425a29d6034772f", size = 9817 },
 ]
 
 [[package]]

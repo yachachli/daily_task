@@ -7,18 +7,21 @@ import httpx
 from dateutil.parser import parse as parse_datetime
 from httpx._types import QueryParamTypes
 
-from daily_bets.db import DBPool
+from daily_bets.db_pool import DBPool
 from daily_bets.logger import logger
 from daily_bets.models import (
     BetAnalysis,
     BetAnalysisInput,
-    Game,
-    NbaPlayer,
-    NbaTeam,
+)
+from daily_bets.odds_api import (
+    fetch_game,
+    fetch_tomorrow_events,
     Outcome,
     SportEvent,
+    Game,
 )
 from daily_bets.utils import batch_calls, normalize_name
+from daily_bets.db.models import NbaPlayer, NbaTeam
 
 T = t.TypeVar("T")
 R = t.TypeVar("R")

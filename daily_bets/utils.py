@@ -19,13 +19,7 @@ def json_dumps_dataclass(obj: t.Any):
     return json.dumps(obj, cls=DataclassEncoder, indent=4)
 
 
-Args = t.TypeVar("Args")
-T = t.TypeVar("T")
-E = t.TypeVar("E")
-R = t.TypeVar("R")
-
-
-async def batch_calls(
+async def batch_calls[T, R](
     datas: t.Iterable[T],
     func: t.Callable[..., t.Awaitable[R]],
     batch_size: int,
@@ -65,8 +59,8 @@ async def batch_calls(
     return results
 
 
-async def batch_calls_result_async(
-    datas: t.Iterable[Args],
+async def batch_calls_result_async[T, E](
+    datas: t.Iterable[t.Any],
     func: t.Callable[..., ResultAsync[T, E]],
     batch_size: int,
 ) -> list[Result[T, E]]:

@@ -7,7 +7,7 @@ from neverraise import ResultAsync
 from daily_bets.env import Env
 
 
-class SportEvent(msgspec.Struct):
+class SportEvent(msgspec.Struct, frozen=True):
     id: str
     sport_key: str
     sport_title: str
@@ -16,7 +16,7 @@ class SportEvent(msgspec.Struct):
     away_team: str
 
 
-class Outcome(msgspec.Struct):
+class Outcome(msgspec.Struct, frozen=True):
     name: str
     """Over or under"""
     description: str
@@ -27,19 +27,19 @@ class Outcome(msgspec.Struct):
     """Line"""
 
 
-class Market(msgspec.Struct):
+class Market(msgspec.Struct, frozen=True):
     key: str
     last_update: str
     outcomes: list[Outcome]
 
 
-class Bookmaker(msgspec.Struct):
+class Bookmaker(msgspec.Struct, frozen=True):
     key: str
     title: str
     markets: list[Market]
 
 
-class Game(msgspec.Struct):
+class Game(msgspec.Struct, frozen=True):
     id: str
     sport_key: str
     sport_title: str

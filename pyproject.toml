@@ -5,18 +5,15 @@ description = "Gets daily bets"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "asyncpg-stubs>=0.30.0",
     "asyncpg>=0.30.0",
     "httpx>=0.28.1",
     "msgspec>=0.19.0",
-    "neverraise==0.1.1",
+    "neverraise==0.1.2",
     "pydantic>=2.10.6",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.0.1",
 ]
 
 [dependency-groups]
-dev = [
-    "asyncpg-stubs>=0.30.0",
-    "pyright>=1.1.391",
-    "ruff>=0.8.4",
-]
+dev = ["asyncpg-stubs>=0.30.0", "pyright>=1.1.391", "ruff>=0.8.4"]
