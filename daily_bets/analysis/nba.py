@@ -216,7 +216,7 @@ async def get_analysis_params(
         game_dt = datetime.fromisoformat(
             event.commence_time.replace("Z", "+00:00")
         ).date()
-        if game_dt - tomorrow > timedelta(days=1):
+        if game_dt > end_date:
             continue
 
         # fmt: off
@@ -243,7 +243,7 @@ async def get_analysis_params(
 
 
 async def run(pool: DBPool):
-    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    end_date = (datetime.now(timezone.utc) + timedelta(days=7)).date()
     copy_params: list[db.NbaCopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's NBA events: {tomorrow}")
 
