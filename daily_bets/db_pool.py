@@ -7,10 +7,13 @@ import asyncpg
 
 if t.TYPE_CHECKING:
     DBPool = asyncpg.Pool[asyncpg.Record]
-    DBConnection = asyncpg.Connection[asyncpg.Record]
+    DBConnection = (
+        asyncpg.Connection[asyncpg.Record]
+        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    )
 else:
     DBPool = asyncpg.Pool
-    DBConnection = asyncpg.Connection
+    DBConnection = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy
 
 
 def encode_jsonb(data: typing.Any):
