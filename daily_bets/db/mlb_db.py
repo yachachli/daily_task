@@ -12,19 +12,33 @@ __all__: collections.abc.Sequence[str] = (
     "mlb_teams",
 )
 
-import msgspec
-import operator
 import typing
 
+import msgspec
+
 if typing.TYPE_CHECKING:
-    import asyncpg
-    import asyncpg.cursor
     import collections.abc
     import datetime
 
-    QueryResultsArgsType: typing.TypeAlias = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | None
+    import asyncpg
+    import asyncpg.cursor
 
-    ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    QueryResultsArgsType: typing.TypeAlias = (
+        int
+        | float
+        | str
+        | memoryview
+        | datetime.date
+        | datetime.time
+        | datetime.datetime
+        | datetime.timedelta
+        | None
+    )
+
+    ConnectionLike: typing.TypeAlias = (
+        asyncpg.Connection[asyncpg.Record]
+        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    )
 
 from daily_bets.db import models
 
@@ -78,6 +92,7 @@ class QueryResults(typing.Generic[T]):
         async def _wrapper() -> collections.abc.Sequence[T]:
             result = await self._conn.fetch(self._sql, *self._args)
             return [self._decode_hook(row) for row in result]
+
         return _wrapper().__await__()
 
     async def __anext__(self) -> T:
@@ -93,22 +108,57 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-async def mlb_copy_analysis(conn: ConnectionLike, *, params: collections.abc.Sequence[MlbCopyAnalysisParams]) -> int:
+async def mlb_copy_analysis(
+    conn: ConnectionLike, *, params: collections.abc.Sequence[MlbCopyAnalysisParams]
+) -> int:
     records = [
         (param.analysis, param.price, param.game_time, param.game_tag)
         for param in params
     ]
-    r = await conn.copy_records_to_table("v2_mlb_daily_bets", columns=["analysis", "price", "game_time", "game_tag"], records=records)
+    r = await conn.copy_records_to_table(
+        "v2_mlb_daily_bets",
+        columns=["analysis", "price", "game_time", "game_tag"],
+        records=records,
+    )
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
 def mlb_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:
     def _decode_hook(row: asyncpg.Record) -> models.MlbPlayer:
-        return models.MlbPlayer(id=row[0], player_id=row[1], long_name=row[2], team_abv=row[3], pos=row[4], height=row[5], weight=row[6], bat=row[7], throw=row[8], b_day=row[9], mlb_headshot=row[10], espn_headshot=row[11], espn_status=row[12], injury_description=row[13], injury_return=row[14])
+        return models.MlbPlayer(
+            id=row[0],
+            player_id=row[1],
+            long_name=row[2],
+            team_abv=row[3],
+            pos=row[4],
+            height=row[5],
+            weight=row[6],
+            bat=row[7],
+            throw=row[8],
+            b_day=row[9],
+            mlb_headshot=row[10],
+            espn_headshot=row[11],
+            espn_status=row[12],
+            injury_description=row[13],
+            injury_return=row[14],
+        )
+
     return QueryResults[models.MlbPlayer](conn, MLB_PLAYERS, _decode_hook)
 
 
 def mlb_teams(conn: ConnectionLike) -> QueryResults[models.MlbTeam]:
     def _decode_hook(row: asyncpg.Record) -> models.MlbTeam:
-        return models.MlbTeam(team_abv=row[0], team_city=row[1], team_name=row[2], conference=row[3], division=row[4], rs=row[5], ra=row[6], wins=row[7], losses=row[8], run_diff=row[9])
+        return models.MlbTeam(
+            team_abv=row[0],
+            team_city=row[1],
+            team_name=row[2],
+            conference=row[3],
+            division=row[4],
+            rs=row[5],
+            ra=row[6],
+            wins=row[7],
+            losses=row[8],
+            run_diff=row[9],
+        )
+
     return QueryResults[models.MlbTeam](conn, MLB_TEAMS, _decode_hook)

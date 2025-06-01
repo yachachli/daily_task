@@ -2,8 +2,8 @@ import asyncio
 import typing as t
 
 from daily_bets.db import delete_old_bets as db
-from daily_bets.logger import logger, setup_logging
 from daily_bets.db_pool import DBConnection, DBPool, db_pool
+from daily_bets.logger import logger, setup_logging
 
 
 async def run_with_pool(
@@ -13,6 +13,7 @@ async def run_with_pool(
     async with pool.acquire() as conn:
         total += await func(conn)
     return total
+
 
 async def main():
     pool = await db_pool()

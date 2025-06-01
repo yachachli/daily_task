@@ -11,21 +11,31 @@ __all__: collections.abc.Sequence[str] = (
     "delete_old_wnba_bets",
 )
 
-import msgspec
-import operator
 import typing
 
 if typing.TYPE_CHECKING:
-    import asyncpg
-    import asyncpg.cursor
     import collections.abc
     import datetime
 
-    QueryResultsArgsType: typing.TypeAlias = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | None
+    import asyncpg
+    import asyncpg.cursor
 
-    ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    QueryResultsArgsType: typing.TypeAlias = (
+        int
+        | float
+        | str
+        | memoryview
+        | datetime.date
+        | datetime.time
+        | datetime.datetime
+        | datetime.timedelta
+        | None
+    )
 
-from daily_bets.db import models
+    ConnectionLike: typing.TypeAlias = (
+        asyncpg.Connection[asyncpg.Record]
+        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    )
 
 
 DELETE_OLD_MLB_BETS: typing.Final[str] = """-- name: DeleteOldMlbBets :execrows

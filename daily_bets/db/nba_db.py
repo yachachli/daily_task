@@ -13,19 +13,33 @@ __all__: collections.abc.Sequence[str] = (
     "nba_teams",
 )
 
-import msgspec
-import operator
 import typing
 
+import msgspec
+
 if typing.TYPE_CHECKING:
-    import asyncpg
-    import asyncpg.cursor
     import collections.abc
     import datetime
 
-    QueryResultsArgsType: typing.TypeAlias = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | None
+    import asyncpg
+    import asyncpg.cursor
 
-    ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    QueryResultsArgsType: typing.TypeAlias = (
+        int
+        | float
+        | str
+        | memoryview
+        | datetime.date
+        | datetime.time
+        | datetime.datetime
+        | datetime.timedelta
+        | None
+    )
+
+    ConnectionLike: typing.TypeAlias = (
+        asyncpg.Connection[asyncpg.Record]
+        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
+    )
 
 from daily_bets.db import models
 
@@ -91,6 +105,7 @@ class QueryResults(typing.Generic[T]):
         async def _wrapper() -> collections.abc.Sequence[T]:
             result = await self._conn.fetch(self._sql, *self._args)
             return [self._decode_hook(row) for row in result]
+
         return _wrapper().__await__()
 
     async def __anext__(self) -> T:
@@ -106,22 +121,61 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-async def nba_copy_analysis(conn: ConnectionLike, *, params: collections.abc.Sequence[NbaCopyAnalysisParams]) -> int:
+async def nba_copy_analysis(
+    conn: ConnectionLike, *, params: collections.abc.Sequence[NbaCopyAnalysisParams]
+) -> int:
     records = [
         (param.analysis, param.price, param.game_time, param.game_tag)
         for param in params
     ]
-    r = await conn.copy_records_to_table("v2_nba_daily_bets", columns=["analysis", "price", "game_time", "game_tag"], records=records)
+    r = await conn.copy_records_to_table(
+        "v2_nba_daily_bets",
+        columns=["analysis", "price", "game_time", "game_tag"],
+        records=records,
+    )
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
 def nba_players_with_team(conn: ConnectionLike) -> QueryResults[NbaPlayersWithTeamRow]:
     def _decode_hook(row: asyncpg.Record) -> NbaPlayersWithTeamRow:
-        return NbaPlayersWithTeamRow(id=row[0], name=row[1], position=row[2], team_id=row[3], player_pic=row[4], player_id=row[5], injury=row[6], team_abv=row[7])
-    return QueryResults[NbaPlayersWithTeamRow](conn, NBA_PLAYERS_WITH_TEAM, _decode_hook)
+        return NbaPlayersWithTeamRow(
+            id=row[0],
+            name=row[1],
+            position=row[2],
+            team_id=row[3],
+            player_pic=row[4],
+            player_id=row[5],
+            injury=row[6],
+            team_abv=row[7],
+        )
+
+    return QueryResults[NbaPlayersWithTeamRow](
+        conn, NBA_PLAYERS_WITH_TEAM, _decode_hook
+    )
 
 
 def nba_teams(conn: ConnectionLike) -> QueryResults[models.NbaTeam]:
     def _decode_hook(row: asyncpg.Record) -> models.NbaTeam:
-        return models.NbaTeam(id=row[0], name=row[1], team_city=row[2], team_abv=row[3], conference=row[4], ppg=row[5], oppg=row[6], wins=row[7], loss=row[8], division=row[9], team_bpg=row[10], team_spg=row[11], team_apg=row[12], team_fga=row[13], team_fgm=row[14], team_fta=row[15], team_tov=row[16], pace=row[17], def_rtg=row[18])
+        return models.NbaTeam(
+            id=row[0],
+            name=row[1],
+            team_city=row[2],
+            team_abv=row[3],
+            conference=row[4],
+            ppg=row[5],
+            oppg=row[6],
+            wins=row[7],
+            loss=row[8],
+            division=row[9],
+            team_bpg=row[10],
+            team_spg=row[11],
+            team_apg=row[12],
+            team_fga=row[13],
+            team_fgm=row[14],
+            team_fta=row[15],
+            team_tov=row[16],
+            pace=row[17],
+            def_rtg=row[18],
+        )
+
     return QueryResults[models.NbaTeam](conn, NBA_TEAMS, _decode_hook)
