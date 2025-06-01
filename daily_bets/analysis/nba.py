@@ -200,7 +200,7 @@ def do_analysis(
 
 
 async def get_analysis_params(
-    client: httpx.AsyncClient, tomorrow: date
+    client: httpx.AsyncClient, end_date: date
 ) -> list[tuple[SportEvent, Outcome, str]]:
     params: set[tuple[SportEvent, Outcome, str]] = set()
 
@@ -245,13 +245,13 @@ async def get_analysis_params(
 async def run(pool: DBPool):
     end_date = (datetime.now(timezone.utc) + timedelta(days=7)).date()
     copy_params: list[db.NbaCopyAnalysisParams] = []
-    logger.info(f"Fetching tomorrow's NBA events: {tomorrow}")
+    logger.info(f"Fetching tomorrow's NBA events: {end_date}")
 
     logger.info("Fetching NBA map from db")
     nba_map = await NbaMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        analysis_params = await get_analysis_params(client, tomorrow)
+        analysis_params = await get_analysis_params(client, end_date)
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
