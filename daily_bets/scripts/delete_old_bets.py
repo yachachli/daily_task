@@ -1,5 +1,4 @@
 import asyncio
-from turtle import setup
 import typing as t
 
 from daily_bets.db import delete_old_bets as db
