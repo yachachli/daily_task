@@ -1,11 +1,11 @@
--- name: DeleteOldNbaBets :exec
+-- name: DeleteOldNbaBets :execrows
 DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week';
 
--- name: DeleteOldNflBets :exec
+-- name: DeleteOldNflBets :execrows
 DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';
 
--- name: DeleteOldMlbBets :exec
+-- name: DeleteOldMlbBets :execrows
 DELETE FROM v2_mlb_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';
 
--- name: DeleteOldWnbaBets :exec
+-- name: DeleteOldWnbaBets :execrows
 DELETE FROM v2_wnba_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';

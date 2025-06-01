@@ -11,61 +11,55 @@ __all__: collections.abc.Sequence[str] = (
     "delete_old_wnba_bets",
 )
 
+import msgspec
+import operator
 import typing
 
 if typing.TYPE_CHECKING:
+    import asyncpg
+    import asyncpg.cursor
     import collections.abc
     import datetime
 
-    import asyncpg
-    import asyncpg.cursor
+    QueryResultsArgsType: typing.TypeAlias = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | None
 
-    QueryResultsArgsType: typing.TypeAlias = (
-        int
-        | float
-        | str
-        | memoryview
-        | datetime.date
-        | datetime.time
-        | datetime.datetime
-        | datetime.timedelta
-        | None
-    )
+    ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
-    ConnectionLike: typing.TypeAlias = (
-        asyncpg.Connection[asyncpg.Record]
-        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
-    )
+from daily_bets.db import models
 
 
-DELETE_OLD_MLB_BETS: typing.Final[str] = """-- name: DeleteOldMlbBets :exec
-DELETE FROM v2_mlb_daily_bets WHERE created_at < NOW() - INTERVAL '1 week'
+DELETE_OLD_MLB_BETS: typing.Final[str] = """-- name: DeleteOldMlbBets :execrows
+DELETE FROM v2_mlb_daily_bets WHERE created_at < NOW() - INTERVAL '1 day'
 """
 
-DELETE_OLD_NBA_BETS: typing.Final[str] = """-- name: DeleteOldNbaBets :exec
-DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week' RETURNING id, analysis, created_at, price, game_time, game_tag
+DELETE_OLD_NBA_BETS: typing.Final[str] = """-- name: DeleteOldNbaBets :execrows
+DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week'
 """
 
-DELETE_OLD_NFL_BETS: typing.Final[str] = """-- name: DeleteOldNflBets :exec
-DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 week'
+DELETE_OLD_NFL_BETS: typing.Final[str] = """-- name: DeleteOldNflBets :execrows
+DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day'
 """
 
-DELETE_OLD_WNBA_BETS: typing.Final[str] = """-- name: DeleteOldWnbaBets :exec
-DELETE FROM v2_wnba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week'
+DELETE_OLD_WNBA_BETS: typing.Final[str] = """-- name: DeleteOldWnbaBets :execrows
+DELETE FROM v2_wnba_daily_bets WHERE created_at < NOW() - INTERVAL '1 day'
 """
 
 
-async def delete_old_mlb_bets(conn: ConnectionLike) -> None:
-    await conn.execute(DELETE_OLD_MLB_BETS)
+async def delete_old_mlb_bets(conn: ConnectionLike) -> int:
+    r = await conn.execute(DELETE_OLD_MLB_BETS)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
-async def delete_old_nba_bets(conn: ConnectionLike) -> None:
-    await conn.execute(DELETE_OLD_NBA_BETS)
+async def delete_old_nba_bets(conn: ConnectionLike) -> int:
+    r = await conn.execute(DELETE_OLD_NBA_BETS)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
-async def delete_old_nfl_bets(conn: ConnectionLike) -> None:
-    await conn.execute(DELETE_OLD_NFL_BETS)
+async def delete_old_nfl_bets(conn: ConnectionLike) -> int:
+    r = await conn.execute(DELETE_OLD_NFL_BETS)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
-async def delete_old_wnba_bets(conn: ConnectionLike) -> None:
-    await conn.execute(DELETE_OLD_WNBA_BETS)
+async def delete_old_wnba_bets(conn: ConnectionLike) -> int:
+    r = await conn.execute(DELETE_OLD_WNBA_BETS)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0

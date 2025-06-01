@@ -13,33 +13,19 @@ __all__: collections.abc.Sequence[str] = (
     "nfl_teams",
 )
 
+import msgspec
+import operator
 import typing
 
-import msgspec
-
 if typing.TYPE_CHECKING:
+    import asyncpg
+    import asyncpg.cursor
     import collections.abc
     import datetime
 
-    import asyncpg
-    import asyncpg.cursor
+    QueryResultsArgsType: typing.TypeAlias = int | float | str | memoryview | datetime.date | datetime.time | datetime.datetime | datetime.timedelta | None
 
-    QueryResultsArgsType: typing.TypeAlias = (
-        int
-        | float
-        | str
-        | memoryview
-        | datetime.date
-        | datetime.time
-        | datetime.datetime
-        | datetime.timedelta
-        | None
-    )
-
-    ConnectionLike: typing.TypeAlias = (
-        asyncpg.Connection[asyncpg.Record]
-        | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
-    )
+    ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
 from daily_bets.db import models
 
@@ -104,7 +90,6 @@ class QueryResults(typing.Generic[T]):
         async def _wrapper() -> collections.abc.Sequence[T]:
             result = await self._conn.fetch(self._sql, *self._args)
             return [self._decode_hook(row) for row in result]
-
         return _wrapper().__await__()
 
     async def __anext__(self) -> T:
@@ -120,64 +105,22 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-async def nfl_copy_analysis(
-    conn: ConnectionLike, *, params: collections.abc.Sequence[NflCopyAnalysisParams]
-) -> int:
+async def nfl_copy_analysis(conn: ConnectionLike, *, params: collections.abc.Sequence[NflCopyAnalysisParams]) -> int:
     records = [
         (param.analysis, param.price, param.game_time, param.game_tag)
         for param in params
     ]
-    r = await conn.copy_records_to_table(
-        "v2_nfl_daily_bets",
-        columns=["analysis", "price", "game_time", "game_tag"],
-        records=records,
-    )
+    r = await conn.copy_records_to_table("v2_nfl_daily_bets", columns=["analysis", "price", "game_time", "game_tag"], records=records)
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
 def nfl_players_with_team(conn: ConnectionLike) -> QueryResults[NflPlayersWithTeamRow]:
     def _decode_hook(row: asyncpg.Record) -> NflPlayersWithTeamRow:
-        return NflPlayersWithTeamRow(
-            id=row[0],
-            team_id=row[1],
-            name=row[2],
-            height=row[3],
-            position=row[4],
-            injury=row[5],
-            team_abv=row[6],
-        )
-
-    return QueryResults[NflPlayersWithTeamRow](
-        conn, NFL_PLAYERS_WITH_TEAM, _decode_hook
-    )
+        return NflPlayersWithTeamRow(id=row[0], team_id=row[1], name=row[2], height=row[3], position=row[4], injury=row[5], team_abv=row[6])
+    return QueryResults[NflPlayersWithTeamRow](conn, NFL_PLAYERS_WITH_TEAM, _decode_hook)
 
 
 def nfl_teams(conn: ConnectionLike) -> QueryResults[models.V3NflTeam]:
     def _decode_hook(row: asyncpg.Record) -> models.V3NflTeam:
-        return models.V3NflTeam(
-            id=row[0],
-            name=row[1],
-            team_code=row[2],
-            wins=row[3],
-            losses=row[4],
-            ties=row[5],
-            points_for=row[6],
-            points_against=row[7],
-            total_tackles=row[8],
-            fumbles_lost=row[9],
-            defensive_touchdowns=row[10],
-            fumbles_recovered=row[11],
-            solo_tackles=row[12],
-            defensive_interceptions=row[13],
-            qb_hits=row[14],
-            tackles_for_loss=row[15],
-            pass_deflections=row[16],
-            sacks=row[17],
-            fumbles=row[18],
-            passing_td_allowed=row[19],
-            passing_yards_allowed=row[20],
-            rushing_yards_allowed=row[21],
-            rushing_td_allowed=row[22],
-        )
-
+        return models.V3NflTeam(id=row[0], name=row[1], team_code=row[2], wins=row[3], losses=row[4], ties=row[5], points_for=row[6], points_against=row[7], total_tackles=row[8], fumbles_lost=row[9], defensive_touchdowns=row[10], fumbles_recovered=row[11], solo_tackles=row[12], defensive_interceptions=row[13], qb_hits=row[14], tackles_for_loss=row[15], pass_deflections=row[16], sacks=row[17], fumbles=row[18], passing_td_allowed=row[19], passing_yards_allowed=row[20], rushing_yards_allowed=row[21], rushing_td_allowed=row[22])
     return QueryResults[models.V3NflTeam](conn, NFL_TEAMS, _decode_hook)
