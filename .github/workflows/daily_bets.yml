@@ -12,6 +12,7 @@ jobs:
     strategy:
       matrix:
         sport: [nba, mlb, wnba] # temp removed nfl
+      fail-fast: false
     name: ${{ matrix.sport }}-analysis
     steps:
       - uses: actions/checkout@v4
