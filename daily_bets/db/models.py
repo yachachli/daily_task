@@ -245,17 +245,17 @@ class V2NbaDailyBet(msgspec.Struct):
     analysis: str
     created_at: datetime.datetime
     price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    game_time: datetime.datetime
+    game_tag: str
 
 
 class V2NflDailyBet(msgspec.Struct):
     id: int
     analysis: str
-    created_at: datetime.datetime | None
+    created_at: datetime.datetime
     price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    game_time: datetime.datetime
+    game_tag: str
 
 
 class V2WnbaDailyBet(msgspec.Struct):
@@ -263,8 +263,8 @@ class V2WnbaDailyBet(msgspec.Struct):
     analysis: str
     created_at: datetime.datetime
     price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    game_time: datetime.datetime
+    game_tag: str
 
 
 class V3NflGame(msgspec.Struct):
