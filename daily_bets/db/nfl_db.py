@@ -47,8 +47,8 @@ from daily_bets.db import models
 class NflCopyAnalysisParams(msgspec.Struct):
     analysis: str
     price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
+    game_time: datetime.datetime
+    game_tag: str
 
 
 class NflPlayersWithTeamRow(msgspec.Struct):

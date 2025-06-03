@@ -275,13 +275,5 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        _ = await conn.copy_records_to_table(
-            "v2_nba_daily_bets",
-            columns=["analysis", "price", "game_time", "game_tag"],
-            records=[
-                (param.analysis, param.price, param.game_time, param.game_tag)
-                for param in copy_params
-            ],
-        )
-        # await mlb_db.copy_analysis(conn, params=copy_params)
-    print(f"Inserted {len(copy_params)} records")
+        copy_count = await db.nba_copy_analysis(conn, params=copy_params)
+    print(f"Inserted {copy_count} records")
