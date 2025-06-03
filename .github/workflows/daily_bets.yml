@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        sport: [nba, mlb, nfl]
+        sport: [nba, mlb, nfl, wnba]
     name: ${{ matrix.sport }}-analysis
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,7 @@ jobs:
           NFL_ANALYSIS_API_URL: ${{ secrets.NFL_ANALYSIS_API_URL }}
           NBA_ANALYSIS_API_URL: ${{ secrets.NBA_ANALYSIS_API_URL }}
           MLB_ANALYSIS_API_URL: ${{ secrets.MLB_ANALYSIS_API_URL }}
+          WNBA_ANALYSIS_API_URL: ${{ secrets.WNBA_ANALYSIS_API_URL }}
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASS: ${{ secrets.DB_PASS }}

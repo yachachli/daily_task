@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 __all__: collections.abc.Sequence[str] = (
-    "NbaCopyAnalysisParams",
-    "NbaPlayersWithTeamRow",
     "QueryResults",
-    "nba_copy_analysis",
-    "nba_players_with_team",
-    "nba_teams",
+    "WnbaCopyAnalysisParams",
+    "WnbaPlayersWithTeamRow",
+    "wnba_copy_analysis",
+    "wnba_players_with_team",
+    "wnba_teams",
 )
 
 import typing
@@ -44,17 +44,17 @@ if typing.TYPE_CHECKING:
 from daily_bets.db import models
 
 
-class NbaCopyAnalysisParams(msgspec.Struct):
+class WnbaCopyAnalysisParams(msgspec.Struct):
     analysis: str
     price: float | None
     game_time: datetime.datetime | None
     game_tag: str | None
 
 
-class NbaPlayersWithTeamRow(msgspec.Struct):
+class WnbaPlayersWithTeamRow(msgspec.Struct):
     id: int
     name: str
-    position: str | None
+    position: str
     team_id: int
     player_pic: str | None
     player_id: int
@@ -62,17 +62,17 @@ class NbaPlayersWithTeamRow(msgspec.Struct):
     team_abv: str
 
 
-NBA_COPY_ANALYSIS: typing.Final[str] = """-- name: NbaCopyAnalysis :copyfrom
-INSERT INTO v2_nba_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
+WNBA_COPY_ANALYSIS: typing.Final[str] = """-- name: WnbaCopyAnalysis :copyfrom
+INSERT INTO v2_wnba_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
-NBA_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: NbaPlayersWithTeam :many
-SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury, T.team_abv FROM nba_players P
-INNER JOIN nba_teams T ON P.team_id = T.id
+WNBA_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: WnbaPlayersWithTeam :many
+SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury, T.team_abv FROM wnba_players P
+INNER JOIN wnba_teams T ON P.team_id = T.id
 """
 
-NBA_TEAMS: typing.Final[str] = """-- name: NbaTeams :many
-SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, division, team_bpg, team_spg, team_apg, team_fga, team_fgm, team_fta, team_tov, pace, def_rtg FROM nba_teams
+WNBA_TEAMS: typing.Final[str] = """-- name: WnbaTeams :many
+SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, team_bpg, team_spg, team_apg, team_fga, team_fgm, team_fta, team_tov FROM wnba_teams
 """
 
 
@@ -121,24 +121,26 @@ class QueryResults(typing.Generic[T]):
         return self._decode_hook(record)
 
 
-async def nba_copy_analysis(
-    conn: ConnectionLike, *, params: collections.abc.Sequence[NbaCopyAnalysisParams]
+async def wnba_copy_analysis(
+    conn: ConnectionLike, *, params: collections.abc.Sequence[WnbaCopyAnalysisParams]
 ) -> int:
     records = [
         (param.analysis, param.price, param.game_time, param.game_tag)
         for param in params
     ]
     r = await conn.copy_records_to_table(
-        "v2_nba_daily_bets",
+        "v2_wnba_daily_bets",
         columns=["analysis", "price", "game_time", "game_tag"],
         records=records,
     )
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
-def nba_players_with_team(conn: ConnectionLike) -> QueryResults[NbaPlayersWithTeamRow]:
-    def _decode_hook(row: asyncpg.Record) -> NbaPlayersWithTeamRow:
-        return NbaPlayersWithTeamRow(
+def wnba_players_with_team(
+    conn: ConnectionLike,
+) -> QueryResults[WnbaPlayersWithTeamRow]:
+    def _decode_hook(row: asyncpg.Record) -> WnbaPlayersWithTeamRow:
+        return WnbaPlayersWithTeamRow(
             id=row[0],
             name=row[1],
             position=row[2],
@@ -149,14 +151,14 @@ def nba_players_with_team(conn: ConnectionLike) -> QueryResults[NbaPlayersWithTe
             team_abv=row[7],
         )
 
-    return QueryResults[NbaPlayersWithTeamRow](
-        conn, NBA_PLAYERS_WITH_TEAM, _decode_hook
+    return QueryResults[WnbaPlayersWithTeamRow](
+        conn, WNBA_PLAYERS_WITH_TEAM, _decode_hook
     )
 
 
-def nba_teams(conn: ConnectionLike) -> QueryResults[models.NbaTeam]:
-    def _decode_hook(row: asyncpg.Record) -> models.NbaTeam:
-        return models.NbaTeam(
+def wnba_teams(conn: ConnectionLike) -> QueryResults[models.WnbaTeam]:
+    def _decode_hook(row: asyncpg.Record) -> models.WnbaTeam:
+        return models.WnbaTeam(
             id=row[0],
             name=row[1],
             team_city=row[2],
@@ -166,16 +168,13 @@ def nba_teams(conn: ConnectionLike) -> QueryResults[models.NbaTeam]:
             oppg=row[6],
             wins=row[7],
             loss=row[8],
-            division=row[9],
-            team_bpg=row[10],
-            team_spg=row[11],
-            team_apg=row[12],
-            team_fga=row[13],
-            team_fgm=row[14],
-            team_fta=row[15],
-            team_tov=row[16],
-            pace=row[17],
-            def_rtg=row[18],
+            team_bpg=row[9],
+            team_spg=row[10],
+            team_apg=row[11],
+            team_fga=row[12],
+            team_fgm=row[13],
+            team_fta=row[14],
+            team_tov=row[15],
         )
 
-    return QueryResults[models.NbaTeam](conn, NBA_TEAMS, _decode_hook)
+    return QueryResults[models.WnbaTeam](conn, WNBA_TEAMS, _decode_hook)

@@ -31,8 +31,6 @@ Run the `dump_schema.sh` script.
 
 Run
 
-## TODO
+## Adding a New Sport
 
-- [ ] fix Player Data response from analysis api
-- [ ] put api urls in .env
-- [ ] move stuff to "models" module
+- https://the-odds-api.com/sports-odds-data/betting-markets.html

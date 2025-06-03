@@ -1,7 +1,7 @@
 {
-    "typeCheckingMode": "strict",
-    "reportMatchNotExhaustive": "error",
-    "reportUnusedCallResult": "error",
-    "reportUnusedCoroutine": "error"
-  }
+  "typeCheckingMode": "strict",
+  "reportMatchNotExhaustive": "error",
+  "reportUnusedCallResult": "error",
+  "reportUnusedCoroutine": "error"
+}
   
