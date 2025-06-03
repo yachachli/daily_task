@@ -1,4 +1,3 @@
-import datetime
 import typing as t
 
 import msgspec
@@ -46,10 +45,3 @@ class BetAnalysis(msgspec.Struct):
     long_answer: str
     player_position: str
     graphs: list[GraphV1]
-
-
-class CopyAnalysisParams(msgspec.Struct):
-    analysis: dict[str, t.Any]
-    price: float | None
-    game_time: datetime.datetime | None
-    game_tag: str | None
