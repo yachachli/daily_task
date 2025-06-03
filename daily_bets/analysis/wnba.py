@@ -26,28 +26,18 @@ from daily_bets.odds_api import (
 from daily_bets.utils import batch_calls_result_async, normalize_name
 
 MARKET_TO_STAT: dict[str, str] = {
-    # "player_assists": "assists",
-    # "player_assists_alternate": "assists",
-    # "player_points": "points",
-    # "player_points_alternate": "points",
-    # "player_points_assists": "points + assists",
-    # "player_points_assists_alternate": "points + assists",
-    # "player_rebounds": "rebounds",
-    # "player_rebounds_alternate": "rebounds",
-    # "player_points_rebounds": "points + rebounds",
-    # "player_points_rebounds_alternate": "points + rebounds",
-    # "player_points_rebounds_assists": "points + rebounds + assists",
-    # "player_points_rebounds_assists_alternate": "points + rebounds + assists",
-    # "player_rebounds_assists": "rebounds + assists",
-    # "player_rebounds_assists_alternate": "rebounds + assists",
-    # "player_threes": "threes",
-    # "player_threes_alternate": "threes",
-    # "player_blocks": "blocks",
-    # "player_blocks_alternate": "blocks",
-    # "player_steals_alternate": "steals",
-    # "player_steals": "steals",
-    # "player_turnovers": "turnovers",
-    # "player_turnovers_alternate": "turnovers",
+    "player_assists": "assists",
+    "player_blocks": "blocks",
+    "player_blocks_steals": "blocks + steals",
+    "player_points_assists": "points + assists",
+    "player_points": "points",
+    "player_points_rebounds_assists": "points + rebounds + assists",
+    "player_points_rebounds": "points + rebounds",
+    "player_rebounds_assists": "rebounds + assists",
+    "player_rebounds": "rebounds",
+    "player_steals": "steals",
+    "player_threes": "threes",
+    "player_turnovers": "turnovers",
 }
 
 SPORT_KEY = "basketball_wnba"
@@ -96,6 +86,13 @@ class WnbaMap:
             name = normalize_name(player.name)
             abv = player.team_abv
             player_dict[(name, abv)] = player
+
+        # special case to map "Skylar Diggins" to "Skylar Diggins-Smith"
+        skylar_diggins = player_dict.get((normalize_name("Skylar Diggins"), "SEA"))
+        if skylar_diggins is not None:
+            player_dict[(normalize_name("Skylar Diggins-Smith"), "SEA")] = (
+                skylar_diggins
+            )
 
         return player_dict
 
