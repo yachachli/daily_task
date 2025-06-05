@@ -5,7 +5,7 @@ on:
     - cron: "0 14 * * *"
   workflow_dispatch: # Allows manual triggering from GitHub UI
 jobs:
-  delete old_bets:
+  delete-old-bets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
