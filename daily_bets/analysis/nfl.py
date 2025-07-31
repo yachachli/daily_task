@@ -1,3 +1,4 @@
+import asyncio
 import typing as t
 from datetime import date, datetime, timedelta, timezone
 
@@ -10,15 +11,21 @@ from neverraise import Err, ErrAsync, Ok, ResultAsync
 from daily_bets.db import nfl_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
-from daily_bets.errors import HttpError, NoPlayerFoundError, NoTeamFoundError
+from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError
 from daily_bets.logger import logger
 from daily_bets.models import (
     BetAnalysisInput,
 )
-from daily_bets.odds_api import Outcome, SportEvent, fetch_game, fetch_tomorrow_events
+from daily_bets.odds_api import (
+    HttpError,
+    Outcome,
+    SportEvent,
+    fetch_game,
+    fetch_tomorrow_events,
+)
 from daily_bets.utils import batch_calls_result_async, normalize_name
 
-MARKET_TO_STAT = {
+MARKET_TO_STAT: dict[str, str] = {
     "player_field_goals": "field goals",
     "player_kicking_points": "kicking points",
     "player_pass_attempts": "pass attempts",
@@ -52,45 +59,60 @@ REGION = "us_dfs"
 
 
 class NflMap:
-    _player_name_and_team_abv_to_player_id: dict[tuple[str, str], int]
+    _player_name_team_abv_to_player: dict[tuple[str, str], db.NflPlayersWithTeamRow]
+    """('patrick mahomes', 'KC') -> NflPlayersWithTeamRow"""
     _team_name_to_abv: dict[str, str]
+    """'kansas city chiefs' -> 'KC'"""
 
-    def __init__(self, players: dict[tuple[str, str], int], teams: dict[str, str]):
-        self._player_name_and_team_abv_to_player_id = players
+    def __init__(
+        self,
+        players: dict[tuple[str, str], db.NflPlayersWithTeamRow],
+        teams: dict[str, str],
+    ):
+        self._player_name_team_abv_to_player = players
         self._team_name_to_abv = teams
+
+    def team_full_name_to_abv(self, name: str) -> str | None:
+        return self._team_name_to_abv.get(normalize_name(name))
+
+    def player_name_to_player_id(
+        self, name: str, team_abv: str
+    ) -> db.NflPlayersWithTeamRow | None:
+        return self._player_name_team_abv_to_player.get(
+            (normalize_name(name), team_abv)
+        )
 
     @classmethod
     async def from_db(cls, pool: DBPool) -> t.Self:
+        [players, teams] = await asyncio.gather(
+            NflMap._load_nfl_players_from_db(pool),
+            NflMap._load_nfl_teams_from_db(pool),
+        )
+        return cls(players, teams)
+
+    @staticmethod
+    async def _load_nfl_players_from_db(pool: DBPool):
         async with pool.acquire() as conn:
-            nfl_players = await db.nfl_players_with_team(conn)
-            nfl_teams = await db.nfl_teams(conn)
+            players = await db.nfl_players_with_team(conn)
 
-        players: dict[tuple[str, str], int] = {}
-        for nfl_player in nfl_players:
-            assert (
-                normalize_name(nfl_player.name),
-                nfl_player.team_abv,
-            ) not in players, f"{nfl_player.name} {nfl_player.team_abv}"
+        player_dict: dict[tuple[str, str], db.NflPlayersWithTeamRow] = {}
+        for player in players:
+            name = normalize_name(player.name)
+            abv = player.team_abv
+            player_dict[(name, abv)] = player
 
-            players[(normalize_name(nfl_player.name), nfl_player.team_abv)] = (
-                nfl_player.id
-            )
-        assert len(players) == len(nfl_players)
+        return player_dict
 
-        team_name_to_abv = {normalize_name(t.name): t.team_code for t in nfl_teams}
+    @staticmethod
+    async def _load_nfl_teams_from_db(pool: DBPool) -> dict[str, str]:
+        async with pool.acquire() as conn:
+            teams = await db.nfl_teams(conn)
 
-        return cls(
-            players,
-            team_name_to_abv,
-        )
+        team_name_to_abv = {
+            normalize_name(t.name): t.team_code for t in teams
+        }
 
-    def player_name_to_player_id(self, player_name: str, team_abv: str) -> int | None:
-        return self._player_name_and_team_abv_to_player_id.get(
-            (normalize_name(player_name), team_abv)
-        )
-
-    def team_full_name_to_abv(self, team_full_name: str) -> str | None:
-        return self._team_name_to_abv.get(normalize_name(team_full_name))
+        return team_name_to_abv
 
 
 def do_analysis(
@@ -123,29 +145,30 @@ def do_analysis(
     )
 
     # figure out which team the player is on
-    player_id = nfl_map.player_name_to_player_id(
+    player = nfl_map.player_name_to_player_id(
         outcome.description,
         team_abv_home,
     )
-    if player_id:
+    if player:
         team_abv_player = team_abv_home
         team_abv_opponent = team_abv_away
     else:
-        player_id = nfl_map.player_name_to_player_id(
+        player = nfl_map.player_name_to_player_id(
             outcome.description,
             team_abv_away,
         )
-        if not player_id:
+        if not player:
             return ErrAsync(
                 NoPlayerFoundError(
                     f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
                 )
             )
+
         team_abv_player = team_abv_away
         team_abv_opponent = team_abv_home
 
     payload = BetAnalysisInput(
-        player_id=player_id,
+        player_id=player.id,
         team_code=team_abv_player,
         opponent_abv=team_abv_opponent,
         stat=stat,
@@ -189,7 +212,7 @@ async def get_analysis_params(
         case Ok(events):
             ...
         case Err() as e:
-            logger.error(f"Error fetching tomorrow's MLB events: {e!r}")
+            logger.error(f"Error fetching tomorrow's NFL events: {e!r}")
             return []
 
     for event in events:
@@ -226,14 +249,13 @@ async def get_analysis_params(
 async def run(pool: DBPool):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
     copy_params: list[db.NflCopyAnalysisParams] = []
-    logger.info(f"Fetching tomorrow's MLB events: {tomorrow}")
+    logger.info(f"Fetching tomorrow's NFL events: {tomorrow}")
 
-    logger.info("Fetching MLB map from db")
+    logger.info("Fetching NFL map from db")
     nfl_map = await NflMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, tomorrow)
-
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [

@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        sport: [nba, mlb, wnba] # temp removed nfl
+        sport: [nba, mlb, wnba, nfl]
       fail-fast: false
     name: ${{ matrix.sport }}-analysis
     steps:
