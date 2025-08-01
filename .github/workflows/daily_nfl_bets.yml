@@ -1,4 +1,4 @@
-name: Daily Bets Analysis
+name: Daily NFLBets Analysis
 
 on:
   schedule:
