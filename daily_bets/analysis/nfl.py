@@ -204,7 +204,7 @@ def do_analysis(
 
 
 async def get_analysis_params(
-    client: httpx.AsyncClient, tomorrow: date
+    client: httpx.AsyncClient, start_date: date, end_date: date
 ) -> list[tuple[SportEvent, Outcome, str]]:
     params: set[tuple[SportEvent, Outcome, str]] = set()
 
@@ -212,7 +212,7 @@ async def get_analysis_params(
         case Ok(events):
             ...
         case Err() as e:
-            logger.error(f"Error fetching tomorrow's NFL events: {e!r}")
+            logger.error(f"Error fetching NFL events: {e!r}")
             return []
 
     for event in events:
@@ -220,7 +220,7 @@ async def get_analysis_params(
         game_dt = datetime.fromisoformat(
             event.commence_time.replace("Z", "+00:00")
         ).date()
-        if game_dt - tomorrow > timedelta(days=1):
+        if game_dt < start_date or game_dt > end_date:
             continue
 
         # fmt: off
@@ -247,15 +247,17 @@ async def get_analysis_params(
 
 
 async def run(pool: DBPool):
-    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    # Look ahead 40 days for NFL games since DFS games are scheduled further out
+    start_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    end_date = (datetime.now(timezone.utc) + timedelta(days=40)).date()
     copy_params: list[db.NflCopyAnalysisParams] = []
-    logger.info(f"Fetching tomorrow's NFL events: {tomorrow}")
+    logger.info(f"Fetching NFL events from {start_date} to {end_date}")
 
     logger.info("Fetching NFL map from db")
     nfl_map = await NflMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        analysis_params = await get_analysis_params(client, tomorrow)
+        analysis_params = await get_analysis_params(client, start_date, end_date)
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
