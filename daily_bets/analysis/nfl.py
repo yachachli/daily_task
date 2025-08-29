@@ -249,7 +249,7 @@ async def get_analysis_params(
 async def run(pool: DBPool):
     # Look ahead 40 days for NFL games since DFS games are scheduled further out
     start_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    end_date = (datetime.now(timezone.utc) + timedelta(days=40)).date()
+    end_date = (datetime.now(timezone.utc) + timedelta(days=8)).date()
     copy_params: list[db.NflCopyAnalysisParams] = []
     logger.info(f"Fetching NFL events from {start_date} to {end_date}")
 
