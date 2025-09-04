@@ -243,15 +243,21 @@ async def get_analysis_params(
                 stat = MARKET_TO_STAT.get(market.key)
                 if not stat:
                     continue
+                
                 for outcome in market.outcomes:
+                    # Filter out one-sided bets (extreme odds indicate only one side available)
+                    # Skip bets with odds >= 5.0 (very extreme odds)
+                    if outcome.price and outcome.price >= 5.0:
+                        logger.info(f"      Skipping one-sided bet: {outcome.description} {stat} {outcome.point} odds={outcome.price}")
+                        continue
                     params.add((event, outcome, stat))
 
     return list(params)
 
 
 async def run(pool: DBPool):
-    # Look ahead 40 days for NFL games since DFS games are scheduled further out
-    start_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    # Look ahead 3 days for NFL games since DFS games are scheduled further out
+    start_date = (datetime.now(timezone.utc) + timedelta(days=0)).date()  # Include today
     end_date = (datetime.now(timezone.utc) + timedelta(days=3)).date()
     copy_params: list[db.NflCopyAnalysisParams] = []
     logger.info(f"Fetching NFL events from {start_date} to {end_date}")
