@@ -11,9 +11,10 @@ from neverraise import Err, ErrAsync, Ok, ResultAsync
 from daily_bets.db import nfl_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
-from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError
+from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError, SkipBetError
 from daily_bets.logger import logger
 from daily_bets.models import (
+    BetAnalysis,
     BetAnalysisInput,
 )
 from daily_bets.odds_api import (
@@ -56,6 +57,7 @@ MARKET_TO_STAT: dict[str, str] = {
 
 SPORT_KEY = "americanfootball_nfl"
 REGION = "us_dfs"
+INCLUDE_ALTERNATE_MARKETS = False
 
 
 class NflMap:
@@ -192,9 +194,32 @@ def do_analysis(
             lambda res: res.text,
             lambda e: DecodeError(e),
         )
+        # Decode to validate recommendation vs line direction, but keep raw text for storage
+        .map(lambda text: (text, msgspec.json.decode(text, type=BetAnalysis)))
+        .try_catch(lambda pair: pair, lambda e: DecodeError(e))
+        .map(lambda pair: (
+            pair[0],
+            pair[1].over_under.lower() if pair[1].over_under is not None else None,
+        ))
+        .try_catch(lambda pair: (
+            pair[0],
+            pair[1],
+            outcome.name.lower(),
+        ), lambda e: DecodeError(e))
+        .try_catch(
+            # If backend recommends the opposite side, raise SkipBetError to skip this bet gracefully
+            lambda triple: (
+                triple[0]
+                if (triple[1] is None or triple[1] == triple[2])
+                else (_ for _ in ()).throw(SkipBetError(
+                    f"Direction mismatch (backend={triple[1]} vs offered={triple[2]})"
+                ))
+            ),
+            lambda e: e,
+        )
         .map(
-            lambda analysis: db.NflCopyAnalysisParams(
-                analysis=analysis,
+            lambda analysis_text: db.NflCopyAnalysisParams(
+                analysis=analysis_text,
                 price=outcome.price,
                 game_time=parse_datetime(event.commence_time),
                 game_tag=game_tag,
@@ -224,7 +249,12 @@ async def get_analysis_params(
             continue
 
         # fmt: off
-        match await fetch_game(client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()): 
+        markets_to_fetch = (
+            list(MARKET_TO_STAT.keys())
+            if INCLUDE_ALTERNATE_MARKETS
+            else [k for k in MARKET_TO_STAT.keys() if not k.endswith("_alternate")]
+        )
+        match await fetch_game(client, SPORT_KEY, event.id, REGION, markets_to_fetch): 
             case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
             case Err() as e:
                 logger.error(f"Error fetching game: {e!r}")
@@ -240,6 +270,9 @@ async def get_analysis_params(
             )
             for market in bookmaker.markets:
                 logger.info(f"      Market: {market.key}")
+                # Optionally skip alternate markets at processing time too
+                if not INCLUDE_ALTERNATE_MARKETS and market.key.endswith("_alternate"):
+                    continue
                 stat = MARKET_TO_STAT.get(market.key)
                 if not stat:
                     continue
@@ -258,7 +291,7 @@ async def get_analysis_params(
 async def run(pool: DBPool):
     # Look ahead 3 days for NFL games since DFS games are scheduled further out
     start_date = (datetime.now(timezone.utc) + timedelta(days=0)).date()  # Include today
-    end_date = (datetime.now(timezone.utc) + timedelta(days=2)).date()
+    end_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
     copy_params: list[db.NflCopyAnalysisParams] = []
     logger.info(f"Fetching NFL events from {start_date} to {end_date}")
 
@@ -285,8 +318,13 @@ async def run(pool: DBPool):
         for res in analysis_jsons:
             # fmt: off
             match res:
-                case Ok(analysis_params): copy_params.append(analysis_params)  # noqa: E701
-                case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
+                case Ok(analysis_params):
+                    copy_params.append(analysis_params)  # noqa: E701
+                case Err(e):
+                    if isinstance(e, SkipBetError):
+                        logger.info(f"Skipping bet: {e}")  # noqa: E701
+                    else:
+                        logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
             # fmt: on
 
     async with pool.acquire() as conn:
