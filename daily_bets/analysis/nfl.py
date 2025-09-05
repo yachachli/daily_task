@@ -42,7 +42,7 @@ MARKET_TO_STAT: dict[str, str] = {
     "player_rush_attempts": "rush carries",
     "player_rush_reception_yds": "rush + rec yards",
     "player_rush_yds": "rush yards",
-    "player_sacks": "sacks",
+    # "player_sacks": "sacks",
     "player_tds_over": "pass + rush + rec tds",
     "player_anytime_td": "pass + rush + rec tds",
     "player_reception_yds_alternate": "rec yards",
