@@ -58,6 +58,8 @@ MARKET_TO_STAT: dict[str, str] = {
 SPORT_KEY = "americanfootball_nfl"
 REGION = "us_dfs"
 INCLUDE_ALTERNATE_MARKETS = False
+# Set to True to skip rookies' bets
+NFL_SKIP_ROOKIES = True
 
 
 class NflMap:
@@ -152,6 +154,8 @@ def do_analysis(
         team_abv_home,
     )
     if player:
+        if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
+            return ErrAsync(SkipBetError(f"Rookie detected for {outcome.description}; skipping"))
         team_abv_player = team_abv_home
         team_abv_opponent = team_abv_away
     else:
@@ -165,6 +169,8 @@ def do_analysis(
                     f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
                 )
             )
+        if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
+            return ErrAsync(SkipBetError(f"Rookie detected for {outcome.description}; skipping"))
 
         team_abv_player = team_abv_away
         team_abv_opponent = team_abv_home

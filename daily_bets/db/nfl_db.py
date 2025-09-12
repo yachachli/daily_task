@@ -58,6 +58,7 @@ class NflPlayersWithTeamRow(msgspec.Struct):
     height: str
     position: str
     injury: str | None
+    is_rookie: bool
     team_abv: str
 
 
@@ -66,7 +67,7 @@ INSERT INTO v2_nfl_daily_bets (analysis, price, game_time, game_tag) VALUES ($1,
 """
 
 NFL_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: NflPlayersWithTeam :many
-SELECT p.id, p.team_id, p.name, p.height, p.position, p.injuries, T.team_code as team_abv FROM v3_nfl_players P
+SELECT p.id, p.team_id, p.name, p.height, p.position, p.injuries, p.is_rookie, T.team_code as team_abv FROM v3_nfl_players P
 INNER JOIN v3_nfl_teams T ON P.team_id = T.id
 """
 
@@ -144,7 +145,8 @@ def nfl_players_with_team(conn: ConnectionLike) -> QueryResults[NflPlayersWithTe
             height=row[3],
             position=row[4],
             injury=row[5],
-            team_abv=row[6],
+            is_rookie=row[6],
+            team_abv=row[7],
         )
 
     return QueryResults[NflPlayersWithTeamRow](
