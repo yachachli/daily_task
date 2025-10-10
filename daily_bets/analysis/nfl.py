@@ -9,6 +9,7 @@ from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
 from daily_bets.db import nfl_db as db
+from daily_bets.db import nfl_backup
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
 from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError, SkipBetError
@@ -53,6 +54,7 @@ MARKET_TO_STAT: dict[str, str] = {
     "player_pats_alternate": "extra points",
     "player_rush_attempts_alternate": "rush carries",
     "player_rush_yds_alternate": "rush yards",
+    "player_fantasy_points": "fantasy points, ppr",
 }
 
 SPORT_KEY = "americanfootball_nfl"
@@ -335,4 +337,9 @@ async def run(pool: DBPool):
 
     async with pool.acquire() as conn:
         copy_count = await db.nfl_copy_analysis(conn, params=copy_params)
-    print(f"Inserted {copy_count} records")
+        try:
+            backup_inserted = await nfl_backup.run_backup_maintenance(conn, days=14)
+        except Exception as e:
+            logger.error(f"Backup maintenance failed: {e!r}")
+            backup_inserted = 0
+    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
