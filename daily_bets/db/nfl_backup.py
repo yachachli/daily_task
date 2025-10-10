@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing as t
+from datetime import timedelta
 
 if t.TYPE_CHECKING:
     import asyncpg
@@ -65,10 +66,10 @@ async def sync_recent_to_backup(conn: ConnectionLike, *, days: int = 14) -> int:
         INSERT INTO public.v2_nfl_daily_bets_backup (id, analysis, created_at, price, game_time, game_tag)
         SELECT b.id, b.analysis, b.created_at, b.price, b.game_time, b.game_tag
         FROM public.v2_nfl_daily_bets b
-        WHERE b.created_at > NOW() - ($1::interval)
+        WHERE b.created_at > NOW() - $1
         ON CONFLICT (id) DO NOTHING
         """,
-        f"{days} days",
+        timedelta(days=days),
     )
     # asyncpg returns tags like "INSERT 0 <n>"
     parts = command_tag.split()
