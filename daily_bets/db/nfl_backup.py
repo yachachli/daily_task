@@ -66,10 +66,10 @@ async def sync_recent_to_backup(conn: ConnectionLike, *, days: int = 14) -> int:
         INSERT INTO public.v2_nfl_daily_bets_backup (id, analysis, created_at, price, game_time, game_tag)
         SELECT b.id, b.analysis, b.created_at, b.price, b.game_time, b.game_tag
         FROM public.v2_nfl_daily_bets b
-        WHERE b.created_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - $1
+        WHERE b.created_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1)
         ON CONFLICT (id) DO NOTHING
         """,
-        timedelta(days=days),
+        days,
     )
     # asyncpg returns tags like "INSERT 0 <n>"
     parts = command_tag.split()
