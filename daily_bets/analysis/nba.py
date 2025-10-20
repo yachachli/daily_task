@@ -252,7 +252,7 @@ async def get_analysis_params(
 
 
 async def run(pool: DBPool):
-    end_date = (datetime.now(timezone.utc) + timedelta(days=7)).date()
+    end_date = (datetime.now(timezone.utc) + timedelta(days=3)).date()
     copy_params: list[db.NbaCopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's NBA events: {end_date}")
 
