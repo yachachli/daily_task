@@ -52,6 +52,7 @@ MARKET_TO_STAT = {
 
 SPORT_KEY = "basketball_nba"
 REGION = "us_dfs"
+INCLUDE_ALTERNATE_MARKETS = False
 
 
 class NbaMap:
@@ -220,7 +221,12 @@ async def get_analysis_params(
             continue
 
         # fmt: off
-        match await fetch_game(client, SPORT_KEY, event.id, REGION, MARKET_TO_STAT.keys()): 
+        markets_to_fetch = (
+            list(MARKET_TO_STAT.keys())
+            if INCLUDE_ALTERNATE_MARKETS
+            else [k for k in MARKET_TO_STAT.keys() if not k.endswith("_alternate")]
+        )
+        match await fetch_game(client, SPORT_KEY, event.id, REGION, markets_to_fetch): 
             case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
             case Err() as e:
                 logger.error(f"Error fetching game: {e!r}")
@@ -233,6 +239,9 @@ async def get_analysis_params(
             )
             for market in bookmaker.markets:
                 logger.info(f"      Market: {market.key}")
+                # Optionally skip alternate markets at processing time too
+                if not INCLUDE_ALTERNATE_MARKETS and market.key.endswith("_alternate"):
+                    continue
                 stat = MARKET_TO_STAT.get(market.key)
                 if not stat:
                     continue
