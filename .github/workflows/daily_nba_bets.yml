@@ -3,7 +3,7 @@ name: Daily NBA Bets Analysis
 on:
   schedule:
     # 11:30 PM Pacific Standard Time / 07:30 UTC
-    - cron: "30 9 * * *"
+    - cron: "30 10 * * *"
   workflow_dispatch:
 
 jobs:
