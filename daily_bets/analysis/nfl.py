@@ -61,7 +61,7 @@ SPORT_KEY = "americanfootball_nfl"
 REGION = "us_dfs"
 INCLUDE_ALTERNATE_MARKETS = False
 # Set to True to skip rookies' bets
-NFL_SKIP_ROOKIES = True
+NFL_SKIP_ROOKIES = False
 
 
 class NflMap:
