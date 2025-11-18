@@ -16,6 +16,7 @@ from daily_bets.logger import logger
 from daily_bets.models import (
     BetAnalysisInput,
 )
+from daily_bets.db import nba_backup
 from daily_bets.odds_api import (
     HttpError,
     Outcome,
@@ -285,4 +286,9 @@ async def run(pool: DBPool):
 
     async with pool.acquire() as conn:
         copy_count = await db.nba_copy_analysis(conn, params=copy_params)
-    print(f"Inserted {copy_count} records")
+        try:
+            backup_inserted = await nba_backup.run_backup_maintenance(conn, days=14)
+        except Exception as e:
+            logger.error(f"Backup maintenance failed: {e!r}")
+            backup_inserted = 0
+    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
