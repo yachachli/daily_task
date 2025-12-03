@@ -62,6 +62,8 @@ REGION = "us_dfs"
 INCLUDE_ALTERNATE_MARKETS = False
 # Set to True to skip rookies' bets
 NFL_SKIP_ROOKIES = True
+# Skip specific player IDs (database IDs from v3_nfl_players)
+NFL_SKIP_PLAYER_IDS: set[int] = {95, 4427728}
 
 
 class NflMap:
@@ -156,6 +158,8 @@ def do_analysis(
         team_abv_home,
     )
     if player:
+        if player.id in NFL_SKIP_PLAYER_IDS:
+            return ErrAsync(SkipBetError(f"Player ID {player.id} flagged to skip; {outcome.description}"))
         if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
             return ErrAsync(SkipBetError(f"Rookie detected for {outcome.description}; skipping"))
         team_abv_player = team_abv_home
@@ -171,6 +175,8 @@ def do_analysis(
                     f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
                 )
             )
+        if player.id in NFL_SKIP_PLAYER_IDS:
+            return ErrAsync(SkipBetError(f"Player ID {player.id} flagged to skip; {outcome.description}"))
         if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
             return ErrAsync(SkipBetError(f"Rookie detected for {outcome.description}; skipping"))
 
