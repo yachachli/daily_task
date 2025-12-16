@@ -47,7 +47,7 @@ DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week'
 """
 
 DELETE_OLD_NFL_BETS: typing.Final[str] = """-- name: DeleteOldNflBets :execrows
-DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day'
+DELETE FROM v2_nfl_daily_bets WHERE game_time < NOW()
 """
 
 DELETE_OLD_WNBA_BETS: typing.Final[str] = """-- name: DeleteOldWnbaBets :execrows

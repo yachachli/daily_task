@@ -2,7 +2,7 @@
 DELETE FROM v2_nba_daily_bets WHERE created_at < NOW() - INTERVAL '1 week';
 
 -- name: DeleteOldNflBets :execrows
-DELETE FROM v2_nfl_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';
+DELETE FROM v2_nfl_daily_bets WHERE game_time < NOW();
 
 -- name: DeleteOldMlbBets :execrows
 DELETE FROM v2_mlb_daily_bets WHERE created_at < NOW() - INTERVAL '1 day';
