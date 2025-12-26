@@ -64,6 +64,8 @@ INCLUDE_ALTERNATE_MARKETS = False
 NFL_SKIP_ROOKIES = True
 # Skip specific player IDs (database IDs from v3_nfl_players)
 NFL_SKIP_PLAYER_IDS: set[int] = {95, 4427728}
+# Skip fantasy points bets for kickers (position 'PK')
+NFL_SKIP_KICKER_FANTASY = True
 
 
 class NflMap:
@@ -158,6 +160,8 @@ def do_analysis(
         team_abv_home,
     )
     if player:
+        if NFL_SKIP_KICKER_FANTASY and stat.startswith("fantasy points") and getattr(player, "position", "") in {"PK", "K"}:
+            return ErrAsync(SkipBetError(f"Kicker fantasy points bet skipped for {outcome.description}"))
         if player.id in NFL_SKIP_PLAYER_IDS:
             return ErrAsync(SkipBetError(f"Player ID {player.id} flagged to skip; {outcome.description}"))
         if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
@@ -175,6 +179,8 @@ def do_analysis(
                     f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
                 )
             )
+        if NFL_SKIP_KICKER_FANTASY and stat.startswith("fantasy points") and getattr(player, "position", "") in {"PK", "K"}:
+            return ErrAsync(SkipBetError(f"Kicker fantasy points bet skipped for {outcome.description}"))
         if player.id in NFL_SKIP_PLAYER_IDS:
             return ErrAsync(SkipBetError(f"Player ID {player.id} flagged to skip; {outcome.description}"))
         if NFL_SKIP_ROOKIES and getattr(player, "is_rookie", False):
