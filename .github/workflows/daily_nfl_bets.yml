@@ -1,9 +1,10 @@
 name: Daily NFLBets Analysis
 
 on:
-  schedule:
-    # 5 AM Pacific / 13 UTC
-    - cron: "0 13 * * *"
+  # Disabled - NFL season is over. Re-enable when season resumes.
+  # schedule:
+  #   # 5 AM Pacific / 13 UTC
+  #   - cron: "0 13 * * *"
   workflow_dispatch:
 
 jobs:
