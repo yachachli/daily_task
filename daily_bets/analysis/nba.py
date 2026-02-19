@@ -233,6 +233,9 @@ async def get_analysis_params(
                 logger.error(f"Error fetching game: {e!r}")
                 return []
         # fmt: on
+        
+        # Add delay to prevent rate limiting (429 errors)
+        await asyncio.sleep(0.2)
 
         for bookmaker in game.bookmakers:
             logger.info(
@@ -275,7 +278,8 @@ async def run(pool: DBPool):
                 for event, outcome, stat in analysis_params
             ],
             do_analysis,
-            batch_size=10,
+            batch_size=5,
+            delay_between_batches=0.5,
         )
         for res in analysis_jsons:
             # fmt: off
