@@ -8,7 +8,7 @@ from dateutil.parser import parse as parse_datetime
 from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.db import nba_db as db
+from daily_bets.db import nba_alt_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
 from daily_bets.errors import NoPlayerFoundError, NoTeamFoundError
@@ -16,7 +16,7 @@ from daily_bets.logger import logger
 from daily_bets.models import (
     BetAnalysisInput,
 )
-from daily_bets.db import nba_backup
+from daily_bets.db import nba_alt_backup
 from daily_bets.odds_api import (
     HttpError,
     Outcome,
@@ -57,14 +57,14 @@ INCLUDE_ALTERNATE_MARKETS = False
 
 
 class NbaMap:
-    _player_name_team_abv_to_player: dict[tuple[str, str], db.NbaPlayersWithTeamRow]
-    """('harry giles iii', 'CHA') -> NbaPlayersWithTeamRow"""
+    _player_name_team_abv_to_player: dict[tuple[str, str], db.NbaAltPlayersWithTeamRow]
+    """('harry giles iii', 'CHA') -> NbaAltPlayersWithTeamRow"""
     _team_name_to_abv: dict[str, str]
     """'charlotte hornets' -> 'CHA'"""
 
     def __init__(
         self,
-        players: dict[tuple[str, str], db.NbaPlayersWithTeamRow],
+        players: dict[tuple[str, str], db.NbaAltPlayersWithTeamRow],
         teams: dict[str, str],
     ):
         self._player_name_team_abv_to_player = players
@@ -75,7 +75,7 @@ class NbaMap:
 
     def player_name_to_player_id(
         self, name: str, team_abv: str
-    ) -> db.NbaPlayersWithTeamRow | None:
+    ) -> db.NbaAltPlayersWithTeamRow | None:
         return self._player_name_team_abv_to_player.get(
             (normalize_name(name), team_abv)
         )
@@ -91,9 +91,9 @@ class NbaMap:
     @staticmethod
     async def _load_nba_players_from_db(pool: DBPool):
         async with pool.acquire() as conn:
-            players = await db.nba_players_with_team(conn)
+            players = await db.nba_alt_players_with_team(conn)
 
-        player_dict: dict[tuple[str, str], db.NbaPlayersWithTeamRow] = {}
+        player_dict: dict[tuple[str, str], db.NbaAltPlayersWithTeamRow] = {}
         for player in players:
             name = normalize_name(player.name)
             abv = player.team_abv
@@ -104,7 +104,7 @@ class NbaMap:
     @staticmethod
     async def _load_nba_teams_from_db(pool: DBPool) -> dict[str, str]:
         async with pool.acquire() as conn:
-            teams = await db.nba_teams(conn)
+            teams = await db.nba_alt_teams(conn)
 
         team_name_to_abv = {
             normalize_name(f"{t.team_city} {t.name}"): t.team_abv for t in teams
@@ -120,7 +120,7 @@ def do_analysis(
     outcome: Outcome,
     stat: str,
 ) -> ResultAsync[
-    db.NbaCopyAnalysisParams,
+    db.NbaAltCopyAnalysisParams,
     NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
 ]:
     team_abv_player: str | None
@@ -191,7 +191,7 @@ def do_analysis(
             lambda e: DecodeError(e),
         )
         .map(
-            lambda analysis: db.NbaCopyAnalysisParams(
+            lambda analysis: db.NbaAltCopyAnalysisParams(
                 analysis=analysis,
                 price=outcome.price,
                 game_time=parse_datetime(event.commence_time),
@@ -257,7 +257,7 @@ async def get_analysis_params(
 
 async def run(pool: DBPool):
     end_date = (datetime.now(timezone.utc) + timedelta(days=3)).date()
-    copy_params: list[db.NbaCopyAnalysisParams] = []
+    copy_params: list[db.NbaAltCopyAnalysisParams] = []
     logger.info(f"Fetching tomorrow's NBA events: {end_date}")
 
     logger.info("Fetching NBA map from db")
@@ -289,9 +289,9 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.nba_copy_analysis(conn, params=copy_params)
+        copy_count = await db.nba_alt_copy_analysis(conn, params=copy_params)
         try:
-            backup_inserted = await nba_backup.run_backup_maintenance(conn, days=14)
+            backup_inserted = await nba_alt_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
