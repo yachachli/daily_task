@@ -1,0 +1,37 @@
+name: Daily NBA Games Predictions
+
+on:
+  schedule:
+    # 12:00 AM Pacific Standard Time / 08:00 UTC
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-daily-nba-games:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Sync Daily NBA Games to Neon
+        env:
+          NBA_GAME_PREDICTOR_URL: ${{ secrets.NBA_GAME_PREDICTOR_URL }}
+          NBA_GAME_PREDICTOR_BEARER_TOKEN: ${{ secrets.NBA_GAME_PREDICTOR_BEARER_TOKEN }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+        run: uv run -m daily_bets.scripts.sync_daily_nba_games
