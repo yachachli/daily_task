@@ -2,8 +2,8 @@ name: Daily NBA Games Predictions
 
 on:
   schedule:
-    # 12:00 AM Pacific Standard Time / 08:00 UTC
-    - cron: "0 8 * * *"
+    # 2:00 AM Pacific Standard Time / 10:00 UTC
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 jobs:
