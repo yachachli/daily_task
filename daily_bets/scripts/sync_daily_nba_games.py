@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS public.nba_game_predictions (
     away_team TEXT NOT NULL,
     predicted_winner TEXT,
     predicted_spread NUMERIC(8, 3),
+    vegas_spread NUMERIC(5, 1),
+    vegas_home_moneyline INTEGER,
+    vegas_away_moneyline INTEGER,
     home_win_prob NUMERIC(8, 6),
     away_win_prob NUMERIC(8, 6),
     confidence TEXT,
@@ -50,6 +53,27 @@ CREATE INDEX IF NOT EXISTS idx_nba_game_predictions_date
 ON public.nba_game_predictions (prediction_date DESC);
 """
 
+ALTER_TABLE_SQL = """
+ALTER TABLE public.nba_game_predictions
+    ADD COLUMN IF NOT EXISTS vegas_spread NUMERIC(5, 1),
+    ADD COLUMN IF NOT EXISTS vegas_home_moneyline INTEGER,
+    ADD COLUMN IF NOT EXISTS vegas_away_moneyline INTEGER;
+"""
+
+FETCH_VEGAS_ODDS_SQL = """
+SELECT DISTINCT ON (game_date, home_team, away_team)
+    game_date,
+    home_team,
+    away_team,
+    spread,
+    home_moneyline,
+    away_moneyline
+FROM public.nba_historical_odds
+WHERE game_date = $1
+  AND source = 'consensus'
+ORDER BY game_date, home_team, away_team, captured_at DESC, id DESC;
+"""
+
 UPSERT_SQL = """
 INSERT INTO public.nba_game_predictions (
     prediction_date,
@@ -57,6 +81,9 @@ INSERT INTO public.nba_game_predictions (
     away_team,
     predicted_winner,
     predicted_spread,
+    vegas_spread,
+    vegas_home_moneyline,
+    vegas_away_moneyline,
     home_win_prob,
     away_win_prob,
     confidence,
@@ -82,14 +109,17 @@ INSERT INTO public.nba_game_predictions (
     github_run_id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
-    $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24::jsonb,
-    $25::jsonb, $26::jsonb, $27, $28
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+    $22::jsonb, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb,
+    $27::jsonb, $28::jsonb, $29::jsonb, $30, $31
 )
 ON CONFLICT (prediction_date, home_team, away_team)
 DO UPDATE SET
     predicted_winner = EXCLUDED.predicted_winner,
     predicted_spread = EXCLUDED.predicted_spread,
+    vegas_spread = EXCLUDED.vegas_spread,
+    vegas_home_moneyline = EXCLUDED.vegas_home_moneyline,
+    vegas_away_moneyline = EXCLUDED.vegas_away_moneyline,
     home_win_prob = EXCLUDED.home_win_prob,
     away_win_prob = EXCLUDED.away_win_prob,
     confidence = EXCLUDED.confidence,
@@ -152,16 +182,26 @@ async def fetch_predictions(
 def row_values(
     prediction_date: dt.date,
     prediction: dict[str, Any],
+    vegas_odds: dict[str, Any] | None,
     source_payload: dict[str, Any],
     source_endpoint: str,
     github_run_id: str | None,
 ) -> tuple[Any, ...]:
+    enriched_prediction = dict(prediction)
+    if vegas_odds:
+        enriched_prediction["vegas_spread"] = vegas_odds.get("spread")
+        enriched_prediction["vegas_home_moneyline"] = vegas_odds.get("home_moneyline")
+        enriched_prediction["vegas_away_moneyline"] = vegas_odds.get("away_moneyline")
+
     return (
         prediction_date,
         prediction.get("home_team"),
         prediction.get("away_team"),
         prediction.get("predicted_winner"),
         prediction.get("predicted_spread"),
+        vegas_odds.get("spread") if vegas_odds else None,
+        vegas_odds.get("home_moneyline") if vegas_odds else None,
+        vegas_odds.get("away_moneyline") if vegas_odds else None,
         prediction.get("home_win_prob"),
         prediction.get("away_win_prob"),
         prediction.get("confidence"),
@@ -181,11 +221,37 @@ def row_values(
         json.dumps(prediction.get("factors", [])),
         json.dumps(prediction.get("home_context", {})),
         json.dumps(prediction.get("away_context", {})),
-        json.dumps(prediction),
+        json.dumps(enriched_prediction),
         json.dumps(source_payload),
         source_endpoint,
         github_run_id,
     )
+
+
+async def fetch_vegas_odds(
+    conn: asyncpg.Connection, prediction_date: dt.date
+) -> dict[tuple[str, str], dict[str, Any]]:
+    try:
+        rows = await conn.fetch(FETCH_VEGAS_ODDS_SQL, prediction_date)
+    except Exception as exc:
+        print(
+            "Warning: failed to load Vegas odds from public.nba_historical_odds "
+            f"for {prediction_date.isoformat()}: {exc}"
+        )
+        return {}
+
+    odds_by_matchup: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        odds_by_matchup[(row["home_team"], row["away_team"])] = {
+            "spread": float(row["spread"]) if row["spread"] is not None else None,
+            "home_moneyline": int(row["home_moneyline"])
+            if row["home_moneyline"] is not None
+            else None,
+            "away_moneyline": int(row["away_moneyline"])
+            if row["away_moneyline"] is not None
+            else None,
+        }
+    return odds_by_matchup
 
 
 async def get_connection() -> asyncpg.Connection:
@@ -234,11 +300,16 @@ async def main() -> None:
     try:
         async with conn.transaction():
             await conn.execute(CREATE_TABLE_SQL)
+            await conn.execute(ALTER_TABLE_SQL)
+            odds_by_matchup = await fetch_vegas_odds(conn, prediction_date)
             if predictions:
                 rows: Sequence[tuple[Any, ...]] = [
                     row_values(
                         prediction_date=prediction_date,
                         prediction=prediction,
+                        vegas_odds=odds_by_matchup.get(
+                            (prediction.get("home_team"), prediction.get("away_team"))
+                        ),
                         source_payload=payload,
                         source_endpoint=endpoint,
                         github_run_id=github_run_id,
@@ -249,7 +320,13 @@ async def main() -> None:
     finally:
         await conn.close()
 
+    odds_matches = sum(
+        1
+        for prediction in predictions
+        if (prediction.get("home_team"), prediction.get("away_team")) in odds_by_matchup
+    )
     print(f"Upserted {len(predictions)} rows into public.nba_game_predictions.")
+    print(f"Matched Vegas odds for {odds_matches} of {len(predictions)} predictions.")
 
 
 if __name__ == "__main__":
