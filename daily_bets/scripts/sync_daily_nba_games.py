@@ -9,6 +9,15 @@ import asyncpg
 import httpx
 
 
+TEAM_ABV_ALIASES = {
+    "GS": "GSW",
+    "NO": "NOP",
+    "NY": "NYK",
+    "PHO": "PHX",
+    "SA": "SAS",
+}
+
+
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS public.nba_game_predictions (
     id BIGSERIAL PRIMARY KEY,
@@ -67,11 +76,34 @@ SELECT DISTINCT ON (game_date, home_team, away_team)
     away_team,
     spread,
     home_moneyline,
-    away_moneyline
+    away_moneyline,
+    source
 FROM public.nba_historical_odds
-WHERE game_date = $1
-  AND source = 'consensus'
-ORDER BY game_date, home_team, away_team, captured_at DESC, id DESC;
+WHERE game_date BETWEEN $1 AND $2
+ORDER BY
+    game_date,
+    home_team,
+    away_team,
+    CASE WHEN source = 'consensus' THEN 0 ELSE 1 END,
+    captured_at DESC,
+    id DESC;
+"""
+
+FETCH_RECENT_PREDICTIONS_SQL = """
+SELECT id, prediction_date, home_team, away_team
+FROM public.nba_game_predictions
+WHERE prediction_date BETWEEN $1 AND $2
+ORDER BY prediction_date DESC, id DESC;
+"""
+
+UPDATE_VEGAS_ODDS_SQL = """
+UPDATE public.nba_game_predictions
+SET
+    vegas_spread = $2,
+    vegas_home_moneyline = $3,
+    vegas_away_moneyline = $4,
+    updated_at = NOW()
+WHERE id = $1;
 """
 
 UPSERT_SQL = """
@@ -228,21 +260,41 @@ def row_values(
     )
 
 
+def canonical_team_abv(team: str | None) -> str | None:
+    if not team:
+        return team
+    return TEAM_ABV_ALIASES.get(team, team)
+
+
+def build_matchup_key(
+    game_date: dt.date, home_team: str | None, away_team: str | None
+) -> tuple[dt.date, str | None, str | None]:
+    return (
+        game_date,
+        canonical_team_abv(home_team),
+        canonical_team_abv(away_team),
+    )
+
+
 async def fetch_vegas_odds(
-    conn: asyncpg.Connection, prediction_date: dt.date
-) -> dict[tuple[str, str], dict[str, Any]]:
+    conn: asyncpg.Connection,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> dict[tuple[dt.date, str | None, str | None], dict[str, Any]]:
     try:
-        rows = await conn.fetch(FETCH_VEGAS_ODDS_SQL, prediction_date)
+        rows = await conn.fetch(FETCH_VEGAS_ODDS_SQL, start_date, end_date)
     except Exception as exc:
         print(
             "Warning: failed to load Vegas odds from public.nba_historical_odds "
-            f"for {prediction_date.isoformat()}: {exc}"
+            f"for {start_date.isoformat()} to {end_date.isoformat()}: {exc}"
         )
         return {}
 
-    odds_by_matchup: dict[tuple[str, str], dict[str, Any]] = {}
+    odds_by_matchup: dict[tuple[dt.date, str | None, str | None], dict[str, Any]] = {}
     for row in rows:
-        odds_by_matchup[(row["home_team"], row["away_team"])] = {
+        odds_by_matchup[
+            build_matchup_key(row["game_date"], row["home_team"], row["away_team"])
+        ] = {
             "spread": float(row["spread"]) if row["spread"] is not None else None,
             "home_moneyline": int(row["home_moneyline"])
             if row["home_moneyline"] is not None
@@ -250,8 +302,41 @@ async def fetch_vegas_odds(
             "away_moneyline": int(row["away_moneyline"])
             if row["away_moneyline"] is not None
             else None,
+            "source": row["source"],
         }
     return odds_by_matchup
+
+
+async def backfill_recent_predictions(
+    conn: asyncpg.Connection,
+    start_date: dt.date,
+    end_date: dt.date,
+    odds_by_matchup: dict[tuple[dt.date, str | None, str | None], dict[str, Any]],
+) -> int:
+    rows = await conn.fetch(FETCH_RECENT_PREDICTIONS_SQL, start_date, end_date)
+    updates: list[tuple[Any, ...]] = []
+    for row in rows:
+        vegas_odds = odds_by_matchup.get(
+            build_matchup_key(
+                row["prediction_date"],
+                row["home_team"],
+                row["away_team"],
+            )
+        )
+        if not vegas_odds:
+            continue
+        updates.append(
+            (
+                row["id"],
+                vegas_odds.get("spread"),
+                vegas_odds.get("home_moneyline"),
+                vegas_odds.get("away_moneyline"),
+            )
+        )
+
+    if updates:
+        await conn.executemany(UPDATE_VEGAS_ODDS_SQL, updates)
+    return len(updates)
 
 
 async def get_connection() -> asyncpg.Connection:
@@ -296,19 +381,30 @@ async def main() -> None:
         f"from {endpoint}"
     )
 
+    backfill_start = prediction_date - dt.timedelta(days=3)
+    backfill_end = prediction_date
+
     conn = await get_connection()
     try:
         async with conn.transaction():
             await conn.execute(CREATE_TABLE_SQL)
             await conn.execute(ALTER_TABLE_SQL)
-            odds_by_matchup = await fetch_vegas_odds(conn, prediction_date)
+            odds_by_matchup = await fetch_vegas_odds(
+                conn,
+                start_date=backfill_start,
+                end_date=backfill_end,
+            )
             if predictions:
                 rows: Sequence[tuple[Any, ...]] = [
                     row_values(
                         prediction_date=prediction_date,
                         prediction=prediction,
                         vegas_odds=odds_by_matchup.get(
-                            (prediction.get("home_team"), prediction.get("away_team"))
+                            build_matchup_key(
+                                prediction_date,
+                                prediction.get("home_team"),
+                                prediction.get("away_team"),
+                            )
                         ),
                         source_payload=payload,
                         source_endpoint=endpoint,
@@ -317,16 +413,29 @@ async def main() -> None:
                     for prediction in predictions
                 ]
                 await conn.executemany(UPSERT_SQL, rows)
+            backfilled_rows = await backfill_recent_predictions(
+                conn,
+                start_date=backfill_start,
+                end_date=backfill_end,
+                odds_by_matchup=odds_by_matchup,
+            )
     finally:
         await conn.close()
 
     odds_matches = sum(
         1
         for prediction in predictions
-        if (prediction.get("home_team"), prediction.get("away_team")) in odds_by_matchup
+        if build_matchup_key(
+            prediction_date,
+            prediction.get("home_team"),
+            prediction.get("away_team"),
+        )
+        in odds_by_matchup
     )
     print(f"Upserted {len(predictions)} rows into public.nba_game_predictions.")
-    print(f"Matched Vegas odds for {odds_matches} of {len(predictions)} predictions.")
+    print(f"Loaded {len(odds_by_matchup)} Vegas odds rows for backfill window.")
+    print(f"Matched Vegas odds for {odds_matches} of {len(predictions)} current predictions.")
+    print(f"Backfilled Vegas odds for {backfilled_rows} recent prediction rows.")
 
 
 if __name__ == "__main__":
