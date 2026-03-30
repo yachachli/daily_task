@@ -1,4 +1,5 @@
 import typing as t
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -27,6 +28,7 @@ from daily_bets.utils import batch_calls_result_async, normalize_name
 
 SPORT_KEY = "baseball_mlb"
 REGION = "us_dfs"
+MAX_BETS_PER_TEAM_PER_GAME = 1
 
 MARKET_TO_STAT = {
     "batter_home_runs": "home runs",
@@ -123,6 +125,30 @@ class MlbMap:
         return self._team_name_to_abv.get(normalize_name(team_full_name))
 
 
+def resolve_player_context(
+    mlb_map: MlbMap,
+    event: SportEvent,
+    player_name: str,
+) -> tuple[int, str, str, str] | None:
+    team_abv_home = mlb_map.team_full_name_to_abv(event.home_team)
+    team_abv_away = mlb_map.team_full_name_to_abv(event.away_team)
+
+    if not team_abv_home or not team_abv_away:
+        return None
+
+    game_tag = f"{team_abv_away}@{team_abv_home}"
+
+    player_id = mlb_map.player_name_to_player_id(player_name, team_abv_home)
+    if player_id:
+        return (player_id, team_abv_home, team_abv_away, game_tag)
+
+    player_id = mlb_map.player_name_to_player_id(player_name, team_abv_away)
+    if player_id:
+        return (player_id, team_abv_away, team_abv_home, game_tag)
+
+    return None
+
+
 def do_analysis(
     mlb_map: MlbMap,
     client: httpx.AsyncClient,
@@ -133,46 +159,27 @@ def do_analysis(
     db.MlbCopyAnalysisParams,
     NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
 ]:
-    team_abv_player: str | None
-    team_abv_opponent: str | None
-
-    team_abv_home = mlb_map.team_full_name_to_abv(event.home_team)
-    team_abv_away = mlb_map.team_full_name_to_abv(event.away_team)
-
-    if not team_abv_home or not team_abv_away:
+    resolved = resolve_player_context(mlb_map, event, outcome.description)
+    if not resolved:
+        team_abv_home = mlb_map.team_full_name_to_abv(event.home_team)
+        team_abv_away = mlb_map.team_full_name_to_abv(event.away_team)
+        if not team_abv_home or not team_abv_away:
+            return ErrAsync(
+                NoTeamFoundError(
+                    f"Not able to find team {event.home_team!r} {team_abv_home!r} or {event.away_team!r} {team_abv_away!r}"
+                )
+            )
         return ErrAsync(
-            NoTeamFoundError(
-                f"Not able to find team {event.home_team!r} {team_abv_home!r} or {event.away_team!r} {team_abv_away!r}"
+            NoPlayerFoundError(
+                f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
             )
         )
 
-    game_tag = f"{team_abv_away}@{team_abv_home}"
+    player_id, team_abv_player, team_abv_opponent, game_tag = resolved
 
     logger.info(
         f"    Handling outcome: {outcome.description} {stat} {outcome.point} {game_tag}"
     )
-
-    # figure out which team the player is on
-    player_id = mlb_map.player_name_to_player_id(
-        outcome.description,
-        team_abv_home,
-    )
-    if player_id:
-        team_abv_player = team_abv_home
-        team_abv_opponent = team_abv_away
-    else:
-        player_id = mlb_map.player_name_to_player_id(
-            outcome.description,
-            team_abv_away,
-        )
-        if not player_id:
-            return ErrAsync(
-                NoPlayerFoundError(
-                    f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
-                )
-            )
-        team_abv_player = team_abv_away
-        team_abv_opponent = team_abv_home
 
     payload = BetAnalysisInput(
         player_id=player_id,
@@ -211,9 +218,10 @@ def do_analysis(
 
 
 async def get_analysis_params(
-    client: httpx.AsyncClient, tomorrow: date
+    client: httpx.AsyncClient, tomorrow: date, mlb_map: MlbMap
 ) -> list[tuple[SportEvent, Outcome, str]]:
-    params: set[tuple[SportEvent, Outcome, str]] = set()
+    params: list[tuple[SportEvent, Outcome, str]] = []
+    seen: set[tuple[SportEvent, Outcome, str]] = set()
 
     match await fetch_tomorrow_events(client, SPORT_KEY):
         case Ok(events):
@@ -248,9 +256,40 @@ async def get_analysis_params(
                 if not stat:
                     continue
                 for outcome in market.outcomes:
-                    params.add((event, outcome, stat))
+                    param = (event, outcome, stat)
+                    if param in seen:
+                        continue
+                    seen.add(param)
+                    params.append(param)
 
-    return list(params)
+    grouped_params: dict[tuple[str, str], list[tuple[SportEvent, Outcome, str]]] = (
+        defaultdict(list)
+    )
+    unresolved_params: list[tuple[SportEvent, Outcome, str]] = []
+    for param in params:
+        event, outcome, _ = param
+        resolved = resolve_player_context(mlb_map, event, outcome.description)
+        if not resolved:
+            unresolved_params.append(param)
+            continue
+
+        _, team_abv_player, _, game_tag = resolved
+        grouped_params[(game_tag, team_abv_player)].append(param)
+
+    limited_params: list[tuple[SportEvent, Outcome, str]] = []
+    dropped_count = 0
+    for grouped in grouped_params.values():
+        limited_params.extend(grouped[:MAX_BETS_PER_TEAM_PER_GAME])
+        dropped_count += max(0, len(grouped) - MAX_BETS_PER_TEAM_PER_GAME)
+
+    if dropped_count:
+        logger.info(
+            "Trimmed %s MLB outcomes due to %s bets per team per game cap",
+            dropped_count,
+            MAX_BETS_PER_TEAM_PER_GAME,
+        )
+
+    return [*limited_params, *unresolved_params]
 
 
 async def run(pool: DBPool):
@@ -262,7 +301,7 @@ async def run(pool: DBPool):
     mlb_map = await MlbMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        analysis_params = await get_analysis_params(client, tomorrow)
+        analysis_params = await get_analysis_params(client, tomorrow, mlb_map)
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
