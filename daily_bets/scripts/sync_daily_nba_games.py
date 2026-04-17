@@ -196,14 +196,19 @@ def parse_prediction_date(value: str) -> dt.date:
 
 
 async def fetch_predictions(
-    endpoint: str, bearer_token: str | None = None
+    endpoint: str, bearer_token: str | None = None, *, date: str | None = None
 ) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     if bearer_token:
         headers["Authorization"] = f"Bearer {bearer_token}"
     timeout = httpx.Timeout(timeout=300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(endpoint, headers=headers)
+        if date:
+            response = await client.post(
+                endpoint, headers=headers, json={"date": date}
+            )
+        else:
+            response = await client.get(endpoint, headers=headers)
         response.raise_for_status()
         payload = response.json()
     if not isinstance(payload, dict):
@@ -357,12 +362,16 @@ async def get_connection() -> asyncpg.Connection:
     )
 
 
-async def main() -> None:
-    endpoint = require_env("NBA_GAME_PREDICTOR_URL")
-    bearer_token = os.getenv("NBA_GAME_PREDICTOR_BEARER_TOKEN")
-    github_run_id = os.getenv("GITHUB_RUN_ID")
-
-    payload = await fetch_predictions(endpoint, bearer_token)
+async def sync_predictions_for_date(
+    conn: asyncpg.Connection,
+    endpoint: str,
+    bearer_token: str | None,
+    github_run_id: str | None,
+    target_date: str,
+) -> None:
+    """Fetch predictions for a specific date and upsert into the database."""
+    print(f"\n--- Syncing predictions for {target_date} ---")
+    payload = await fetch_predictions(endpoint, bearer_token, date=target_date)
     date_raw = payload.get("date")
     if not isinstance(date_raw, str):
         raise RuntimeError("Predictor response is missing string field 'date'.")
@@ -376,6 +385,10 @@ async def main() -> None:
         p for p in predictions_raw if isinstance(p, dict)
     ]
 
+    if not predictions:
+        print(f"No games found for {prediction_date.isoformat()}, skipping.")
+        return
+
     print(
         f"Fetched {len(predictions)} predictions for {prediction_date.isoformat()} "
         f"from {endpoint}"
@@ -384,43 +397,34 @@ async def main() -> None:
     backfill_start = prediction_date - dt.timedelta(days=3)
     backfill_end = prediction_date
 
-    conn = await get_connection()
-    try:
-        async with conn.transaction():
-            await conn.execute(CREATE_TABLE_SQL)
-            await conn.execute(ALTER_TABLE_SQL)
-            odds_by_matchup = await fetch_vegas_odds(
-                conn,
-                start_date=backfill_start,
-                end_date=backfill_end,
-            )
-            if predictions:
-                rows: Sequence[tuple[Any, ...]] = [
-                    row_values(
-                        prediction_date=prediction_date,
-                        prediction=prediction,
-                        vegas_odds=odds_by_matchup.get(
-                            build_matchup_key(
-                                prediction_date,
-                                prediction.get("home_team"),
-                                prediction.get("away_team"),
-                            )
-                        ),
-                        source_payload=payload,
-                        source_endpoint=endpoint,
-                        github_run_id=github_run_id,
+    async with conn.transaction():
+        odds_by_matchup = await fetch_vegas_odds(
+            conn, start_date=backfill_start, end_date=backfill_end,
+        )
+        rows: Sequence[tuple[Any, ...]] = [
+            row_values(
+                prediction_date=prediction_date,
+                prediction=prediction,
+                vegas_odds=odds_by_matchup.get(
+                    build_matchup_key(
+                        prediction_date,
+                        prediction.get("home_team"),
+                        prediction.get("away_team"),
                     )
-                    for prediction in predictions
-                ]
-                await conn.executemany(UPSERT_SQL, rows)
-            backfilled_rows = await backfill_recent_predictions(
-                conn,
-                start_date=backfill_start,
-                end_date=backfill_end,
-                odds_by_matchup=odds_by_matchup,
+                ),
+                source_payload=payload,
+                source_endpoint=endpoint,
+                github_run_id=github_run_id,
             )
-    finally:
-        await conn.close()
+            for prediction in predictions
+        ]
+        await conn.executemany(UPSERT_SQL, rows)
+        backfilled_rows = await backfill_recent_predictions(
+            conn,
+            start_date=backfill_start,
+            end_date=backfill_end,
+            odds_by_matchup=odds_by_matchup,
+        )
 
     odds_matches = sum(
         1
@@ -436,6 +440,32 @@ async def main() -> None:
     print(f"Loaded {len(odds_by_matchup)} Vegas odds rows for backfill window.")
     print(f"Matched Vegas odds for {odds_matches} of {len(predictions)} current predictions.")
     print(f"Backfilled Vegas odds for {backfilled_rows} recent prediction rows.")
+
+
+async def main() -> None:
+    endpoint = require_env("NBA_GAME_PREDICTOR_URL")
+    bearer_token = os.getenv("NBA_GAME_PREDICTOR_BEARER_TOKEN")
+    github_run_id = os.getenv("GITHUB_RUN_ID")
+
+    today = dt.datetime.now(dt.timezone.utc).date()
+    target_dates = [
+        (today + dt.timedelta(days=1)).strftime("%Y%m%d"),
+        (today + dt.timedelta(days=2)).strftime("%Y%m%d"),
+    ]
+
+    conn = await get_connection()
+    try:
+        await conn.execute(CREATE_TABLE_SQL)
+        await conn.execute(ALTER_TABLE_SQL)
+        for target_date in target_dates:
+            try:
+                await sync_predictions_for_date(
+                    conn, endpoint, bearer_token, github_run_id, target_date
+                )
+            except Exception as exc:
+                print(f"Warning: failed to sync predictions for {target_date}: {exc}")
+    finally:
+        await conn.close()
 
 
 if __name__ == "__main__":
