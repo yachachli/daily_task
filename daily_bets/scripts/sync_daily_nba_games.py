@@ -449,6 +449,7 @@ async def main() -> None:
 
     today = dt.datetime.now(dt.timezone.utc).date()
     target_dates = [
+        today.strftime("%Y%m%d"),
         (today + dt.timedelta(days=1)).strftime("%Y%m%d"),
         (today + dt.timedelta(days=2)).strftime("%Y%m%d"),
     ]
