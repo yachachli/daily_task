@@ -11,8 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # wnba disabled - season is over. Re-enable when season resumes.
-        sport: [mlb] # to add wnba, just do ,wnba in the list
+        sport: [mlb, wnba]
       fail-fast: false
     name: ${{ matrix.sport }}-analysis
     steps:
