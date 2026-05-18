@@ -9,7 +9,6 @@ __all__: collections.abc.Sequence[str] = (
     "MlbCopyAnalysisParams",
     "MlbRecentAnalysisKeysRow",
     "QueryResults",
-    "mlb_analysis_exists",
     "mlb_copy_analysis",
     "mlb_dedupe_recent_analysis",
     "mlb_players",
@@ -50,19 +49,6 @@ class MlbRecentAnalysisKeysRow(msgspec.Struct):
     stat: typing.Any | None
     line: decimal.Decimal
 
-
-MLB_ANALYSIS_EXISTS: typing.Final[str] = """-- name: MlbAnalysisExists :one
-SELECT EXISTS (
-    SELECT 1
-    FROM public.v2_mlb_daily_bets
-    WHERE
-        game_time = $1
-        AND game_tag = $2
-        AND (analysis->'input'->>'player_id')::int = $3::int
-        AND analysis->'input'->>'stat' = $4
-        AND (analysis->'input'->>'line')::numeric = $5::numeric
-)
-"""
 
 MLB_COPY_ANALYSIS: typing.Final[str] = """-- name: MlbCopyAnalysis :copyfrom
 INSERT INTO v2_mlb_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
@@ -172,13 +158,6 @@ class QueryResults(typing.Generic[T]):
             self._iterator = None
             raise
         return self._decode_hook(record)
-
-
-async def mlb_analysis_exists(conn: ConnectionLike, *, game_time: datetime.datetime, game_tag: str, player_id: int, stat: str, line: decimal.Decimal) -> bool | None:
-    row = await conn.fetchrow(MLB_ANALYSIS_EXISTS, game_time, game_tag, player_id, stat, line)
-    if row is None:
-        return None
-    return row[0]
 
 
 async def mlb_copy_analysis(conn: ConnectionLike, *, params: collections.abc.Sequence[MlbCopyAnalysisParams]) -> int:

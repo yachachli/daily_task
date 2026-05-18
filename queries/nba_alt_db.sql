@@ -28,18 +28,6 @@ DELETE FROM public.v2_nba_alt_daily_bets b
 USING ranked r
 WHERE b.id = r.id AND r.rn > 1;
 
--- name: NbaAltAnalysisExists :one
-SELECT EXISTS (
-    SELECT 1
-    FROM public.v2_nba_alt_daily_bets
-    WHERE
-        game_time = sqlc.arg(game_time)
-        AND game_tag = sqlc.arg(game_tag)
-        AND (analysis->'input'->>'player_id')::int = sqlc.arg(player_id)::int
-        AND analysis->'input'->>'stat' = sqlc.arg(stat)
-        AND (analysis->'input'->>'line')::numeric = sqlc.arg(line)::numeric
-);
-
 -- name: NbaAltRecentAnalysisKeys :many
 SELECT
     game_time,
