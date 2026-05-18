@@ -19,7 +19,7 @@ __all__: collections.abc.Sequence[str] = (
 
 import datetime
 import decimal
-import msgspec
+import msgspec  # noqa: F401
 import operator  # noqa: F401
 import typing
 
@@ -32,7 +32,7 @@ if typing.TYPE_CHECKING:
 
     ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
-from daily_bets.db import models
+from daily_bets.db import models  # noqa: F401
 
 
 class MlbCopyAnalysisParams(msgspec.Struct):
@@ -62,7 +62,7 @@ WITH ranked AS (
             PARTITION BY
                 game_time,
                 game_tag,
-                (analysis->'input'->>'player_id')::int,
+                (analysis->'input'->>'player_id')::bigint,
                 analysis->'input'->>'stat',
                 (analysis->'input'->>'line')::numeric
             ORDER BY created_at DESC, id DESC
@@ -83,7 +83,7 @@ MLB_RECENT_ANALYSIS_KEYS: typing.Final[str] = """-- name: MlbRecentAnalysisKeys 
 SELECT
     game_time,
     game_tag,
-    (analysis->'input'->>'player_id')::int AS player_id,
+    (analysis->'input'->>'player_id')::bigint AS player_id,
     analysis->'input'->>'stat' AS stat,
     (analysis->'input'->>'line')::numeric AS line
 FROM public.v2_mlb_daily_bets
@@ -104,8 +104,8 @@ WITH inserted AS (
         WHERE
             game_time = $3
             AND game_tag = $4
-            AND (analysis->'input'->>'player_id')::int =
-                ($1::json->'input'->>'player_id')::int
+            AND (analysis->'input'->>'player_id')::bigint =
+                ($1::json->'input'->>'player_id')::bigint
             AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
             AND (analysis->'input'->>'line')::numeric =
                 ($1::json->'input'->>'line')::numeric

@@ -3,6 +3,7 @@
 #   sqlc v1.31.1
 #   sqlc-gen-better-python v0.4.5
 from __future__ import annotations
+# pyright: reportUnusedImport=false
 
 __all__: collections.abc.Sequence[str] = (
     "BracketiqAtsHistorical",
@@ -71,7 +72,7 @@ __all__: collections.abc.Sequence[str] = (
     "WnbaTeam",
 )
 
-import msgspec
+import msgspec  # noqa: F401
 import typing
 
 if typing.TYPE_CHECKING:

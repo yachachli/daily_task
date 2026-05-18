@@ -15,7 +15,7 @@ WITH ranked AS (
             PARTITION BY
                 game_time,
                 game_tag,
-                (analysis->'input'->>'player_id')::int,
+                (analysis->'input'->>'player_id')::bigint,
                 analysis->'input'->>'stat',
                 (analysis->'input'->>'line')::numeric
             ORDER BY created_at DESC, id DESC
@@ -31,7 +31,7 @@ WHERE b.id = r.id AND r.rn > 1;
 SELECT
     game_time,
     game_tag,
-    (analysis->'input'->>'player_id')::int AS player_id,
+    (analysis->'input'->>'player_id')::bigint AS player_id,
     analysis->'input'->>'stat' AS stat,
     (analysis->'input'->>'line')::numeric AS line
 FROM public.v2_mlb_daily_bets
@@ -47,8 +47,8 @@ WITH inserted AS (
         WHERE
             game_time = sqlc.arg(game_time)
             AND game_tag = sqlc.arg(game_tag)
-            AND (analysis->'input'->>'player_id')::int =
-                (sqlc.arg(analysis_json)::json->'input'->>'player_id')::int
+            AND (analysis->'input'->>'player_id')::bigint =
+                (sqlc.arg(analysis_json)::json->'input'->>'player_id')::bigint
             AND analysis->'input'->>'stat' = (sqlc.arg(analysis_json)::json->'input'->>'stat')
             AND (analysis->'input'->>'line')::numeric =
                 (sqlc.arg(analysis_json)::json->'input'->>'line')::numeric

@@ -20,7 +20,7 @@ __all__: collections.abc.Sequence[str] = (
 
 import datetime
 import decimal
-import msgspec
+import msgspec  # noqa: F401
 import operator  # noqa: F401
 import typing
 
@@ -33,7 +33,7 @@ if typing.TYPE_CHECKING:
 
     ConnectionLike: typing.TypeAlias = asyncpg.Connection[asyncpg.Record] | asyncpg.pool.PoolConnectionProxy[asyncpg.Record]
 
-from daily_bets.db import models
+from daily_bets.db import models  # noqa: F401
 
 
 class NflCopyAnalysisParams(msgspec.Struct):
@@ -78,7 +78,7 @@ WITH ranked AS (
             PARTITION BY
                 game_time,
                 game_tag,
-                (analysis->'input'->>'player_id')::int,
+                (analysis->'input'->>'player_id')::bigint,
                 analysis->'input'->>'stat',
                 (analysis->'input'->>'line')::numeric
             ORDER BY created_at DESC, id DESC
@@ -100,7 +100,7 @@ NFL_RECENT_ANALYSIS_KEYS: typing.Final[str] = """-- name: NflRecentAnalysisKeys 
 SELECT
     game_time,
     game_tag,
-    (analysis->'input'->>'player_id')::int AS player_id,
+    (analysis->'input'->>'player_id')::bigint AS player_id,
     analysis->'input'->>'stat' AS stat,
     (analysis->'input'->>'line')::numeric AS line
 FROM public.v2_nfl_daily_bets
@@ -108,7 +108,7 @@ WHERE created_at >= now() - make_interval(days => $1)
 """
 
 NFL_TEAMS: typing.Final[str] = """-- name: NflTeams :many
-SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed, "new notes", team_logo, offense_notes, schedule_2025 FROM v3_nfl_teams
+SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed, new_notes, team_logo, offense_notes, schedule_2025 FROM v3_nfl_teams
 """
 
 NFL_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NflUpsertAnalysis :one
@@ -121,8 +121,8 @@ WITH inserted AS (
         WHERE
             game_time = $3
             AND game_tag = $4
-            AND (analysis->'input'->>'player_id')::int =
-                ($1::json->'input'->>'player_id')::int
+            AND (analysis->'input'->>'player_id')::bigint =
+                ($1::json->'input'->>'player_id')::bigint
             AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
             AND (analysis->'input'->>'line')::numeric =
                 ($1::json->'input'->>'line')::numeric
