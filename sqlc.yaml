@@ -2,8 +2,8 @@ version: "2"
 plugins:
   - name: python
     wasm:
-      url: https://github.com/rayakame/sqlc-gen-better-python/releases/download/v0.4.4/sqlc-gen-better-python.wasm
-      sha256: b0d544244edd80dfd4c768c23c133ae7e3a00d03978e33efa5ddaa55ea2845e0
+      url: https://github.com/rayakame/sqlc-gen-better-python/releases/download/v0.4.5/sqlc-gen-better-python.wasm
+      sha256: 9b42f7cffda942388470e777af957ec8ab03cbea9124ff8c49bef05f9d00cb66
 sql:
   - engine: "postgresql"
     queries: "queries"
@@ -16,4 +16,19 @@ sql:
           emit_init_file: true
           sql_driver: "asyncpg"
           model_type: "msgspec"
-
+          rename:
+            "off_efg%": "off_efg_pct"
+            "off_to%": "off_to_pct"
+            "off_or%": "off_or_pct"
+            "def_efg%": "def_efg_pct"
+            "def_to%": "def_to_pct"
+            "def_or%": "def_or_pct"
+            "3p%": "three_p_pct"
+            "2p%": "two_p_pct"
+            "ft%": "ft_pct"
+            "blk%": "blk_pct"
+            "stl%": "stl_pct"
+            "nst%": "nst_pct"
+            "a%": "a_pct"
+            "3pa%": "three_pa_pct"
+            "new notes": "new_notes"

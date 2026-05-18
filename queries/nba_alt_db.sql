@@ -33,11 +33,11 @@ SELECT EXISTS (
     SELECT 1
     FROM public.v2_nba_alt_daily_bets
     WHERE
-        game_time = $1
-        AND game_tag = $2
-        AND (analysis->'input'->>'player_id')::int = $3
-        AND analysis->'input'->>'stat' = $4
-        AND (analysis->'input'->>'line')::numeric = $5::numeric
+        game_time = sqlc.arg(game_time)
+        AND game_tag = sqlc.arg(game_tag)
+        AND (analysis->'input'->>'player_id')::int = sqlc.arg(player_id)::int
+        AND analysis->'input'->>'stat' = sqlc.arg(stat)
+        AND (analysis->'input'->>'line')::numeric = sqlc.arg(line)::numeric
 );
 
 -- name: NbaAltRecentAnalysisKeys :many
@@ -53,18 +53,18 @@ WHERE created_at >= now() - make_interval(days => $1);
 -- name: NbaAltUpsertAnalysis :one
 WITH inserted AS (
     INSERT INTO public.v2_nba_alt_daily_bets (analysis, price, game_time, game_tag)
-    SELECT $1, $2, $3, $4
+    SELECT sqlc.arg(analysis_json), sqlc.arg(price), sqlc.arg(game_time), sqlc.arg(game_tag)
     WHERE NOT EXISTS (
         SELECT 1
         FROM public.v2_nba_alt_daily_bets
         WHERE
-            game_time = $3
-            AND game_tag = $4
+            game_time = sqlc.arg(game_time)
+            AND game_tag = sqlc.arg(game_tag)
             AND (analysis->'input'->>'player_id')::int =
-                ($1::json->'input'->>'player_id')::int
-            AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+                (sqlc.arg(analysis_json)::json->'input'->>'player_id')::int
+            AND analysis->'input'->>'stat' = (sqlc.arg(analysis_json)::json->'input'->>'stat')
             AND (analysis->'input'->>'line')::numeric =
-                ($1::json->'input'->>'line')::numeric
+                (sqlc.arg(analysis_json)::json->'input'->>'line')::numeric
     )
     RETURNING 1
 )

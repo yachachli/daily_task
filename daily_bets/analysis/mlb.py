@@ -382,5 +382,16 @@ async def run(pool: DBPool):
         dedupe_count = await db.mlb_dedupe_recent_analysis(conn, days=1)
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate MLB bets")
-        copy_count = await db.mlb_copy_analysis(conn, params=copy_params)
-    print(f"Inserted {copy_count} records")
+        upsert_count = 0
+        for param in copy_params:
+            upsert_count += (
+                await db.mlb_upsert_analysis(
+                    conn,
+                    analysis_json=param.analysis,
+                    price=param.price,
+                    game_time=param.game_time,
+                    game_tag=param.game_tag,
+                )
+                or 0
+            )
+    print(f"Inserted {upsert_count} records")
