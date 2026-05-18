@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typing as t
-from datetime import timedelta
 
 if t.TYPE_CHECKING:
     import asyncpg
@@ -19,7 +18,7 @@ async def dedupe_backup(conn: ConnectionLike) -> None:
 
     Uses ctid to deterministically keep one row per id when created_at ties.
     """
-    await conn.execute(
+    _ = await conn.execute(
         """
         WITH ranked AS (
           SELECT ctid, id,
@@ -39,7 +38,7 @@ async def dedupe_backup(conn: ConnectionLike) -> None:
 
 async def ensure_unique_index(conn: ConnectionLike) -> None:
     """Ensure a unique index exists on backup table id column."""
-    await conn.execute(
+    _ = await conn.execute(
         """
         DO $$
         BEGIN
@@ -66,7 +65,7 @@ async def sync_recent_to_backup(conn: ConnectionLike, *, days: int = 14) -> int:
         INSERT INTO public.v2_nfl_daily_bets_backup (id, analysis, created_at, price, game_time, game_tag)
         SELECT b.id, b.analysis, b.created_at, b.price, b.game_time, b.game_tag
         FROM public.v2_nfl_daily_bets b
-        WHERE b.created_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1)
+        WHERE b.created_at > now() - make_interval(days => $1)
         ON CONFLICT (id) DO NOTHING
         """,
         days,
@@ -86,5 +85,3 @@ async def run_backup_maintenance(conn: ConnectionLike, *, days: int = 14) -> int
     await dedupe_backup(conn)
     await ensure_unique_index(conn)
     return await sync_recent_to_backup(conn, days=days)
-
-

@@ -9,6 +9,7 @@ from dateutil.parser import parse as parse_datetime
 from daily_bets.errors import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
+from daily_bets.analysis.existing_bets import make_existing_bet_key
 from daily_bets.db import wnba_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
@@ -202,6 +203,56 @@ def do_analysis(
     )
 
 
+async def filter_existing_analysis_params(
+    pool: DBPool,
+    wnba_map: WnbaMap,
+    params: list[tuple[SportEvent, Outcome, str]],
+) -> list[tuple[SportEvent, Outcome, str]]:
+    filtered: list[tuple[SportEvent, Outcome, str]] = []
+    skipped_count = 0
+    unresolved_count = 0
+    async with pool.acquire() as conn:
+        existing_keys = {
+            make_existing_bet_key(
+                row.game_time,
+                row.game_tag,
+                row.player_id,
+                row.stat,
+                row.line,
+            )
+            for row in await db.wnba_recent_analysis_keys(conn, days=1)
+            if row.stat is not None
+        }
+        for event, outcome, stat in params:
+            resolved = resolve_player_context(wnba_map, event, outcome.description)
+            if not resolved:
+                unresolved_count += 1
+                continue
+
+            player_id, _, _, game_tag = resolved
+            key = make_existing_bet_key(
+                parse_datetime(event.commence_time),
+                game_tag,
+                player_id,
+                stat,
+                outcome.point,
+            )
+            if key in existing_keys:
+                skipped_count += 1
+                logger.info(
+                    f"    Skipping existing WNBA bet: {outcome.description} {stat} {outcome.point} {game_tag}"
+                )
+                continue
+            existing_keys.add(key)
+            filtered.append((event, outcome, stat))
+
+    if skipped_count:
+        logger.info(f"Skipped {skipped_count} existing WNBA bets before analysis")
+    if unresolved_count:
+        logger.info(f"Skipped {unresolved_count} unresolved WNBA bets before analysis")
+    return filtered
+
+
 async def get_analysis_params(
     client: httpx.AsyncClient, tomorrow: date, wnba_map: WnbaMap
 ) -> list[tuple[SportEvent, Outcome, str]]:
@@ -287,6 +338,9 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, tomorrow, wnba_map)
+        analysis_params = await filter_existing_analysis_params(
+            pool, wnba_map, analysis_params
+        )
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
@@ -310,5 +364,19 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.wnba_copy_analysis(conn, params=copy_params)
-    print(f"Inserted {copy_count} records")
+        dedupe_count = await db.wnba_dedupe_recent_analysis(conn, days=1)
+        if dedupe_count:
+            logger.info(f"Deleted {dedupe_count} recent duplicate WNBA bets")
+        upsert_count = 0
+        for param in copy_params:
+            upsert_count += (
+                await db.wnba_upsert_analysis(
+                    conn,
+                    analysis_json=param.analysis,
+                    price=param.price,
+                    game_time=param.game_time,
+                    game_tag=param.game_tag,
+                )
+                or 0
+            )
+    print(f"Inserted {upsert_count} records")
