@@ -9,6 +9,7 @@ __all__: collections.abc.Sequence[str] = (
     "QueryResults",
     "mlb_copy_analysis",
     "mlb_dedupe_recent_analysis",
+    "mlb_analysis_exists",
     "mlb_players",
     "mlb_teams",
     "mlb_upsert_analysis",
@@ -79,6 +80,19 @@ USING ranked r
 WHERE b.id = r.id AND r.rn > 1
 """
 
+MLB_ANALYSIS_EXISTS: typing.Final[str] = """-- name: MlbAnalysisExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM public.v2_mlb_daily_bets
+    WHERE
+        game_time = $1
+        AND game_tag = $2
+        AND (analysis->'input'->>'player_id')::int = $3
+        AND analysis->'input'->>'stat' = $4
+        AND (analysis->'input'->>'line')::numeric = $5::numeric
+)
+"""
+
 MLB_PLAYERS: typing.Final[str] = """-- name: MlbPlayers :many
 SELECT id, player_id, long_name, team_abv, pos, height, weight, bat, throw, b_day, mlb_headshot, espn_headshot, espn_status, injury_description, injury_return FROM mlb_players
 """
@@ -88,30 +102,24 @@ SELECT team_abv, team_city, team_name, conference, division, rs, ra, wins, losse
 """
 
 MLB_UPSERT_ANALYSIS: typing.Final[str] = """-- name: MlbUpsertAnalysis :one
-WITH updated AS (
-    UPDATE public.v2_mlb_daily_bets
-    SET
-        analysis = $1,
-        price = $2,
-        game_time = $3,
-        game_tag = $4,
-        created_at = now()
-    WHERE
-        game_time = $3
-        AND game_tag = $4
-        AND (analysis->'input'->>'player_id')::int =
-            ($1::json->'input'->>'player_id')::int
-        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
-        AND (analysis->'input'->>'line')::numeric =
-            ($1::json->'input'->>'line')::numeric
-    RETURNING 1
-), inserted AS (
+WITH inserted AS (
     INSERT INTO public.v2_mlb_daily_bets (analysis, price, game_time, game_tag)
     SELECT $1, $2, $3, $4
-    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.v2_mlb_daily_bets
+        WHERE
+            game_time = $3
+            AND game_tag = $4
+            AND (analysis->'input'->>'player_id')::int =
+                ($1::json->'input'->>'player_id')::int
+            AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+            AND (analysis->'input'->>'line')::numeric =
+                ($1::json->'input'->>'line')::numeric
+    )
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
+SELECT count(*) FROM inserted
 """
 
 
@@ -178,6 +186,22 @@ async def mlb_copy_analysis(
 async def mlb_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
     r = await conn.execute(MLB_DEDUPE_RECENT_ANALYSIS, days)
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
+async def mlb_analysis_exists(
+    conn: ConnectionLike,
+    *,
+    game_time: datetime.datetime,
+    game_tag: str,
+    player_id: int,
+    stat: str,
+    line: float,
+) -> bool:
+    return bool(
+        await conn.fetchval(
+            MLB_ANALYSIS_EXISTS, game_time, game_tag, player_id, stat, line
+        )
+    )
 
 
 def mlb_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:

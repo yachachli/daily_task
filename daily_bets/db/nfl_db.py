@@ -10,6 +10,7 @@ __all__: collections.abc.Sequence[str] = (
     "QueryResults",
     "nfl_copy_analysis",
     "nfl_dedupe_recent_analysis",
+    "nfl_analysis_exists",
     "nfl_players_with_team",
     "nfl_teams",
     "nfl_upsert_analysis",
@@ -91,6 +92,19 @@ USING ranked r
 WHERE b.id = r.id AND r.rn > 1
 """
 
+NFL_ANALYSIS_EXISTS: typing.Final[str] = """-- name: NflAnalysisExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM public.v2_nfl_daily_bets
+    WHERE
+        game_time = $1
+        AND game_tag = $2
+        AND (analysis->'input'->>'player_id')::int = $3
+        AND analysis->'input'->>'stat' = $4
+        AND (analysis->'input'->>'line')::numeric = $5::numeric
+)
+"""
+
 NFL_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: NflPlayersWithTeam :many
 SELECT p.id, p.team_id, p.name, p.height, p.position, p.injuries, p.is_rookie, T.team_code as team_abv FROM v3_nfl_players P
 INNER JOIN v3_nfl_teams T ON P.team_id = T.id
@@ -101,30 +115,24 @@ SELECT id, name, team_code, wins, losses, ties, points_for, points_against, tota
 """
 
 NFL_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NflUpsertAnalysis :one
-WITH updated AS (
-    UPDATE public.v2_nfl_daily_bets
-    SET
-        analysis = $1,
-        price = $2,
-        game_time = $3,
-        game_tag = $4,
-        created_at = now()
-    WHERE
-        game_time = $3
-        AND game_tag = $4
-        AND (analysis->'input'->>'player_id')::int =
-            ($1::json->'input'->>'player_id')::int
-        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
-        AND (analysis->'input'->>'line')::numeric =
-            ($1::json->'input'->>'line')::numeric
-    RETURNING 1
-), inserted AS (
+WITH inserted AS (
     INSERT INTO public.v2_nfl_daily_bets (analysis, price, game_time, game_tag)
     SELECT $1, $2, $3, $4
-    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.v2_nfl_daily_bets
+        WHERE
+            game_time = $3
+            AND game_tag = $4
+            AND (analysis->'input'->>'player_id')::int =
+                ($1::json->'input'->>'player_id')::int
+            AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+            AND (analysis->'input'->>'line')::numeric =
+                ($1::json->'input'->>'line')::numeric
+    )
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
+SELECT count(*) FROM inserted
 """
 
 
@@ -191,6 +199,22 @@ async def nfl_copy_analysis(
 async def nfl_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
     r = await conn.execute(NFL_DEDUPE_RECENT_ANALYSIS, days)
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
+async def nfl_analysis_exists(
+    conn: ConnectionLike,
+    *,
+    game_time: datetime.datetime,
+    game_tag: str,
+    player_id: int,
+    stat: str,
+    line: float,
+) -> bool:
+    return bool(
+        await conn.fetchval(
+            NFL_ANALYSIS_EXISTS, game_time, game_tag, player_id, stat, line
+        )
+    )
 
 
 def nfl_players_with_team(conn: ConnectionLike) -> QueryResults[NflPlayersWithTeamRow]:

@@ -10,6 +10,7 @@ __all__: collections.abc.Sequence[str] = (
     "WnbaPlayersWithTeamRow",
     "wnba_copy_analysis",
     "wnba_dedupe_recent_analysis",
+    "wnba_analysis_exists",
     "wnba_players_with_team",
     "wnba_teams",
     "wnba_upsert_analysis",
@@ -91,6 +92,19 @@ USING ranked r
 WHERE b.id = r.id AND r.rn > 1
 """
 
+WNBA_ANALYSIS_EXISTS: typing.Final[str] = """-- name: WnbaAnalysisExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM public.v2_wnba_daily_bets
+    WHERE
+        game_time = $1
+        AND game_tag = $2
+        AND (analysis->'input'->>'player_id')::int = $3
+        AND analysis->'input'->>'stat' = $4
+        AND (analysis->'input'->>'line')::numeric = $5::numeric
+)
+"""
+
 WNBA_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: WnbaPlayersWithTeam :many
 SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury, T.team_abv FROM wnba_players P
 INNER JOIN wnba_teams T ON P.team_id = T.id
@@ -101,30 +115,24 @@ SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, team_bp
 """
 
 WNBA_UPSERT_ANALYSIS: typing.Final[str] = """-- name: WnbaUpsertAnalysis :one
-WITH updated AS (
-    UPDATE public.v2_wnba_daily_bets
-    SET
-        analysis = $1,
-        price = $2,
-        game_time = $3,
-        game_tag = $4,
-        created_at = now()
-    WHERE
-        game_time = $3
-        AND game_tag = $4
-        AND (analysis->'input'->>'player_id')::int =
-            ($1::json->'input'->>'player_id')::int
-        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
-        AND (analysis->'input'->>'line')::numeric =
-            ($1::json->'input'->>'line')::numeric
-    RETURNING 1
-), inserted AS (
+WITH inserted AS (
     INSERT INTO public.v2_wnba_daily_bets (analysis, price, game_time, game_tag)
     SELECT $1, $2, $3, $4
-    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.v2_wnba_daily_bets
+        WHERE
+            game_time = $3
+            AND game_tag = $4
+            AND (analysis->'input'->>'player_id')::int =
+                ($1::json->'input'->>'player_id')::int
+            AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+            AND (analysis->'input'->>'line')::numeric =
+                ($1::json->'input'->>'line')::numeric
+    )
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
+SELECT count(*) FROM inserted
 """
 
 
@@ -191,6 +199,22 @@ async def wnba_copy_analysis(
 async def wnba_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
     r = await conn.execute(WNBA_DEDUPE_RECENT_ANALYSIS, days)
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
+async def wnba_analysis_exists(
+    conn: ConnectionLike,
+    *,
+    game_time: datetime.datetime,
+    game_tag: str,
+    player_id: int,
+    stat: str,
+    line: float,
+) -> bool:
+    return bool(
+        await conn.fetchval(
+            WNBA_ANALYSIS_EXISTS, game_time, game_tag, player_id, stat, line
+        )
+    )
 
 
 def wnba_players_with_team(

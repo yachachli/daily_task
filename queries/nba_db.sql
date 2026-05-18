@@ -28,28 +28,34 @@ DELETE FROM public.v2_nba_daily_bets b
 USING ranked r
 WHERE b.id = r.id AND r.rn > 1;
 
--- name: NbaUpsertAnalysis :one
-WITH updated AS (
-    UPDATE public.v2_nba_daily_bets
-    SET
-        analysis = $1,
-        price = $2,
-        game_time = $3,
-        game_tag = $4,
-        created_at = now()
+-- name: NbaAnalysisExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM public.v2_nba_daily_bets
     WHERE
-        game_time = $3
-        AND game_tag = $4
-        AND (analysis->'input'->>'player_id')::int =
-            ($1::json->'input'->>'player_id')::int
-        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
-        AND (analysis->'input'->>'line')::numeric =
-            ($1::json->'input'->>'line')::numeric
-    RETURNING 1
-), inserted AS (
+        game_time = $1
+        AND game_tag = $2
+        AND (analysis->'input'->>'player_id')::int = $3
+        AND analysis->'input'->>'stat' = $4
+        AND (analysis->'input'->>'line')::numeric = $5::numeric
+);
+
+-- name: NbaUpsertAnalysis :one
+WITH inserted AS (
     INSERT INTO public.v2_nba_daily_bets (analysis, price, game_time, game_tag)
     SELECT $1, $2, $3, $4
-    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.v2_nba_daily_bets
+        WHERE
+            game_time = $3
+            AND game_tag = $4
+            AND (analysis->'input'->>'player_id')::int =
+                ($1::json->'input'->>'player_id')::int
+            AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+            AND (analysis->'input'->>'line')::numeric =
+                ($1::json->'input'->>'line')::numeric
+    )
     RETURNING 1
 )
-SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted);
+SELECT count(*) FROM inserted;

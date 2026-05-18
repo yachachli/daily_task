@@ -113,6 +113,30 @@ class NbaMap:
         return team_name_to_abv
 
 
+def resolve_player_context(
+    nba_map: NbaMap,
+    event: SportEvent,
+    player_name: str,
+) -> tuple[int, str, str, str] | None:
+    team_abv_home = nba_map.team_full_name_to_abv(event.home_team)
+    team_abv_away = nba_map.team_full_name_to_abv(event.away_team)
+
+    if not team_abv_home or not team_abv_away:
+        return None
+
+    game_tag = f"{team_abv_away}@{team_abv_home}"
+
+    player = nba_map.player_name_to_player_id(player_name, team_abv_home)
+    if player:
+        return (player.player_id, team_abv_home, team_abv_away, game_tag)
+
+    player = nba_map.player_name_to_player_id(player_name, team_abv_away)
+    if player:
+        return (player.player_id, team_abv_away, team_abv_home, game_tag)
+
+    return None
+
+
 def do_analysis(
     nba_map: NbaMap,
     client: httpx.AsyncClient,
@@ -201,6 +225,42 @@ def do_analysis(
     )
 
 
+async def filter_existing_analysis_params(
+    pool: DBPool,
+    nba_map: NbaMap,
+    params: list[tuple[SportEvent, Outcome, str]],
+) -> list[tuple[SportEvent, Outcome, str]]:
+    filtered: list[tuple[SportEvent, Outcome, str]] = []
+    skipped_count = 0
+    async with pool.acquire() as conn:
+        for event, outcome, stat in params:
+            resolved = resolve_player_context(nba_map, event, outcome.description)
+            if not resolved:
+                filtered.append((event, outcome, stat))
+                continue
+
+            player_id, _, _, game_tag = resolved
+            exists = await db.nba_alt_analysis_exists(
+                conn,
+                game_time=parse_datetime(event.commence_time),
+                game_tag=game_tag,
+                player_id=player_id,
+                stat=stat,
+                line=outcome.point,
+            )
+            if exists:
+                skipped_count += 1
+                logger.info(
+                    f"    Skipping existing NBA alt bet: {outcome.description} {stat} {outcome.point} {game_tag}"
+                )
+                continue
+            filtered.append((event, outcome, stat))
+
+    if skipped_count:
+        logger.info(f"Skipped {skipped_count} existing NBA alt bets before analysis")
+    return filtered
+
+
 async def get_analysis_params(
     client: httpx.AsyncClient, end_date: date
 ) -> list[tuple[SportEvent, Outcome, str]]:
@@ -265,6 +325,9 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, end_date)
+        analysis_params = await filter_existing_analysis_params(
+            pool, nba_map, analysis_params
+        )
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [

@@ -217,6 +217,42 @@ def do_analysis(
     )
 
 
+async def filter_existing_analysis_params(
+    pool: DBPool,
+    mlb_map: MlbMap,
+    params: list[tuple[SportEvent, Outcome, str]],
+) -> list[tuple[SportEvent, Outcome, str]]:
+    filtered: list[tuple[SportEvent, Outcome, str]] = []
+    skipped_count = 0
+    async with pool.acquire() as conn:
+        for event, outcome, stat in params:
+            resolved = resolve_player_context(mlb_map, event, outcome.description)
+            if not resolved:
+                filtered.append((event, outcome, stat))
+                continue
+
+            player_id, _, _, game_tag = resolved
+            exists = await db.mlb_analysis_exists(
+                conn,
+                game_time=parse_datetime(event.commence_time),
+                game_tag=game_tag,
+                player_id=player_id,
+                stat=stat,
+                line=outcome.point,
+            )
+            if exists:
+                skipped_count += 1
+                logger.info(
+                    f"    Skipping existing MLB bet: {outcome.description} {stat} {outcome.point} {game_tag}"
+                )
+                continue
+            filtered.append((event, outcome, stat))
+
+    if skipped_count:
+        logger.info(f"Skipped {skipped_count} existing MLB bets before analysis")
+    return filtered
+
+
 async def get_analysis_params(
     client: httpx.AsyncClient, tomorrow: date, mlb_map: MlbMap
 ) -> list[tuple[SportEvent, Outcome, str]]:
@@ -302,6 +338,9 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, tomorrow, mlb_map)
+        analysis_params = await filter_existing_analysis_params(
+            pool, mlb_map, analysis_params
+        )
         logger.info(f"Processing {len(analysis_params)} analysis params")
         analysis_jsons = await batch_calls_result_async(
             [
