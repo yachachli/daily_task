@@ -40,6 +40,16 @@ SELECT EXISTS (
         AND (analysis->'input'->>'line')::numeric = $5::numeric
 );
 
+-- name: WnbaRecentAnalysisKeys :many
+SELECT
+    game_time,
+    game_tag,
+    (analysis->'input'->>'player_id')::int AS player_id,
+    analysis->'input'->>'stat' AS stat,
+    (analysis->'input'->>'line')::numeric AS line
+FROM public.v2_wnba_daily_bets
+WHERE created_at >= now() - make_interval(days => $1);
+
 -- name: WnbaUpsertAnalysis :one
 WITH inserted AS (
     INSERT INTO public.v2_wnba_daily_bets (analysis, price, game_time, game_tag)
