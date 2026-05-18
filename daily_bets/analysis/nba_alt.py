@@ -54,6 +54,7 @@ MARKET_TO_STAT = {
 SPORT_KEY = "basketball_nba"
 REGION = "us_dfs"
 INCLUDE_ALTERNATE_MARKETS = False
+BetKey = tuple[datetime, str, int, str, float]
 
 
 class NbaAltMap:
@@ -201,6 +202,43 @@ def do_analysis(
     )
 
 
+def bet_key_from_params(
+    nba_alt_map: NbaAltMap,
+    event: SportEvent,
+    outcome: Outcome,
+    stat: str,
+) -> BetKey:
+    team_abv_home = nba_alt_map.team_full_name_to_abv(event.home_team)
+    team_abv_away = nba_alt_map.team_full_name_to_abv(event.away_team)
+
+    if not team_abv_home or not team_abv_away:
+        raise NoTeamFoundError(
+            f"Not able to find team {event.home_team!r} {team_abv_home!r} or {event.away_team!r} {team_abv_away!r}"
+        )
+
+    player = nba_alt_map.player_name_to_player_id(
+        outcome.description,
+        team_abv_home,
+    )
+    if not player:
+        player = nba_alt_map.player_name_to_player_id(
+            outcome.description,
+            team_abv_away,
+        )
+    if not player:
+        raise NoPlayerFoundError(
+            f"No player found for {outcome.description} on team {team_abv_home} or {team_abv_away}"
+        )
+
+    return (
+        parse_datetime(event.commence_time),
+        f"{team_abv_away}@{team_abv_home}",
+        player.player_id,
+        stat,
+        outcome.point,
+    )
+
+
 async def get_analysis_params(
     client: httpx.AsyncClient, end_date: date
 ) -> list[tuple[SportEvent, Outcome, str]]:
@@ -262,7 +300,33 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, end_date)
-        logger.info(f"Processing {len(analysis_params)} analysis params")
+        async with pool.acquire() as conn:
+            dedupe_count = await db.nba_dedupe_recent_analysis(conn, days=1)
+            if dedupe_count:
+                logger.info(f"Deleted {dedupe_count} recent duplicate NBA bets")
+            recent_bet_keys = await db.nba_recent_bet_keys(conn, days=1)
+            existing_bet_keys: set[BetKey] = {
+                (row.game_time, row.game_tag, row.player_id, str(row.stat), row.line)
+                for row in recent_bet_keys
+                if row.stat is not None
+            }
+
+        filtered_analysis_params: list[tuple[SportEvent, Outcome, str]] = []
+        for event, outcome, stat in analysis_params:
+            try:
+                key = bet_key_from_params(nba_alt_map, event, outcome, stat)
+            except (NoTeamFoundError, NoPlayerFoundError) as e:
+                logger.error(f"Error handling outcome: {e!r}")
+                continue
+            if key in existing_bet_keys:
+                continue
+            existing_bet_keys.add(key)
+            filtered_analysis_params.append((event, outcome, stat))
+
+        logger.info(
+            f"Processing {len(filtered_analysis_params)} new analysis params "
+            f"after skipping {len(analysis_params) - len(filtered_analysis_params)} recent existing bets"
+        )
         analysis_jsons = await batch_calls_result_async(
             [
                 (
@@ -272,7 +336,7 @@ async def run(pool: DBPool):
                     outcome,
                     stat,
                 )
-                for event, outcome, stat in analysis_params
+                for event, outcome, stat in filtered_analysis_params
             ],
             do_analysis,
             batch_size=10,
@@ -285,10 +349,18 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.nba_copy_analysis(conn, params=copy_params)
+        write_count = 0
+        for param in copy_params:
+            write_count += await db.nba_upsert_analysis(
+                conn,
+                analysis=param.analysis,
+                price=param.price,
+                game_time=param.game_time,
+                game_tag=param.game_tag,
+            )
         try:
             backup_inserted = await nba_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
-    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
+    print(f"Wrote {write_count} records; backup sync inserted {backup_inserted}")
