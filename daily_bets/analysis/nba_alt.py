@@ -8,6 +8,10 @@ from dateutil.parser import parse as parse_datetime
 from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
+from daily_bets.analysis.existing_bets import (
+    fetch_recent_analysis_keys,
+    make_existing_bet_key,
+)
 from daily_bets.db import nba_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
@@ -232,32 +236,38 @@ async def filter_existing_analysis_params(
 ) -> list[tuple[SportEvent, Outcome, str]]:
     filtered: list[tuple[SportEvent, Outcome, str]] = []
     skipped_count = 0
+    unresolved_count = 0
     async with pool.acquire() as conn:
+        existing_keys = await fetch_recent_analysis_keys(
+            conn, "public.v2_nba_daily_bets", days=1
+        )
         for event, outcome, stat in params:
             resolved = resolve_player_context(nba_alt_map, event, outcome.description)
             if not resolved:
-                filtered.append((event, outcome, stat))
+                unresolved_count += 1
                 continue
 
             player_id, _, _, game_tag = resolved
-            exists = await db.nba_analysis_exists(
-                conn,
-                game_time=parse_datetime(event.commence_time),
-                game_tag=game_tag,
-                player_id=player_id,
-                stat=stat,
-                line=outcome.point,
+            key = make_existing_bet_key(
+                parse_datetime(event.commence_time),
+                game_tag,
+                player_id,
+                stat,
+                outcome.point,
             )
-            if exists:
+            if key in existing_keys:
                 skipped_count += 1
                 logger.info(
                     f"    Skipping existing NBA bet: {outcome.description} {stat} {outcome.point} {game_tag}"
                 )
                 continue
+            existing_keys.add(key)
             filtered.append((event, outcome, stat))
 
     if skipped_count:
         logger.info(f"Skipped {skipped_count} existing NBA bets before analysis")
+    if unresolved_count:
+        logger.info(f"Skipped {unresolved_count} unresolved NBA bets before analysis")
     return filtered
 
 
@@ -351,18 +361,10 @@ async def run(pool: DBPool):
         dedupe_count = await db.nba_dedupe_recent_analysis(conn, days=1)
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate NBA bets")
-        write_count = 0
-        for param in copy_params:
-            write_count += await db.nba_upsert_analysis(
-                conn,
-                analysis=param.analysis,
-                price=param.price,
-                game_time=param.game_time,
-                game_tag=param.game_tag,
-            )
+        copy_count = await db.nba_copy_analysis(conn, params=copy_params)
         try:
             backup_inserted = await nba_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
-    print(f"Wrote {write_count} records; backup sync inserted {backup_inserted}")
+    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
