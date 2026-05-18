@@ -9,8 +9,10 @@ __all__: collections.abc.Sequence[str] = (
     "NbaAltPlayersWithTeamRow",
     "QueryResults",
     "nba_alt_copy_analysis",
+    "nba_alt_dedupe_recent_analysis",
     "nba_alt_players_with_team",
     "nba_alt_teams",
+    "nba_alt_upsert_analysis",
 )
 
 import typing
@@ -66,6 +68,29 @@ NBA_ALT_COPY_ANALYSIS: typing.Final[str] = """-- name: NbaAltCopyAnalysis :copyf
 INSERT INTO v2_nba_alt_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
+NBA_ALT_DEDUPE_RECENT_ANALYSIS: typing.Final[
+    str
+] = """-- name: NbaAltDedupeRecentAnalysis :execrows
+WITH ranked AS (
+    SELECT
+        id,
+        row_number() OVER (
+            PARTITION BY
+                game_time,
+                game_tag,
+                (analysis->'input'->>'player_id')::int,
+                analysis->'input'->>'stat',
+                (analysis->'input'->>'line')::numeric
+            ORDER BY created_at DESC, id DESC
+        ) AS rn
+    FROM public.v2_nba_alt_daily_bets
+    WHERE created_at >= now() - make_interval(days => $1)
+)
+DELETE FROM public.v2_nba_alt_daily_bets b
+USING ranked r
+WHERE b.id = r.id AND r.rn > 1
+"""
+
 NBA_ALT_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: NbaAltPlayersWithTeam :many
 SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury, T.team_abv FROM nba_players P
 INNER JOIN nba_teams T ON P.team_id = T.id
@@ -73,6 +98,33 @@ INNER JOIN nba_teams T ON P.team_id = T.id
 
 NBA_ALT_TEAMS: typing.Final[str] = """-- name: NbaAltTeams :many
 SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, division, team_bpg, team_spg, team_apg, team_fga, team_fgm, team_fta, team_tov, pace, def_rtg FROM nba_teams
+"""
+
+NBA_ALT_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NbaAltUpsertAnalysis :one
+WITH updated AS (
+    UPDATE public.v2_nba_alt_daily_bets
+    SET
+        analysis = $1,
+        price = $2,
+        game_time = $3,
+        game_tag = $4,
+        created_at = now()
+    WHERE
+        game_time = $3
+        AND game_tag = $4
+        AND (analysis->'input'->>'player_id')::int =
+            ($1::json->'input'->>'player_id')::int
+        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+        AND (analysis->'input'->>'line')::numeric =
+            ($1::json->'input'->>'line')::numeric
+    RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_nba_alt_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
 """
 
 
@@ -136,6 +188,11 @@ async def nba_alt_copy_analysis(
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
+async def nba_alt_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
+    r = await conn.execute(NBA_ALT_DEDUPE_RECENT_ANALYSIS, days)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
 def nba_alt_players_with_team(conn: ConnectionLike) -> QueryResults[NbaAltPlayersWithTeamRow]:
     def _decode_hook(row: asyncpg.Record) -> NbaAltPlayersWithTeamRow:
         return NbaAltPlayersWithTeamRow(
@@ -179,3 +236,17 @@ def nba_alt_teams(conn: ConnectionLike) -> QueryResults[models.NbaTeam]:
         )
 
     return QueryResults[models.NbaTeam](conn, NBA_ALT_TEAMS, _decode_hook)
+
+
+async def nba_alt_upsert_analysis(
+    conn: ConnectionLike,
+    *,
+    analysis: str,
+    price: float | None,
+    game_time: datetime.datetime,
+    game_tag: str,
+) -> int:
+    r = await conn.fetchval(
+        NBA_ALT_UPSERT_ANALYSIS, analysis, price, game_time, game_tag
+    )
+    return int(r or 0)

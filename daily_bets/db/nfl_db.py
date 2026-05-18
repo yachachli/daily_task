@@ -9,8 +9,10 @@ __all__: collections.abc.Sequence[str] = (
     "NflPlayersWithTeamRow",
     "QueryResults",
     "nfl_copy_analysis",
+    "nfl_dedupe_recent_analysis",
     "nfl_players_with_team",
     "nfl_teams",
+    "nfl_upsert_analysis",
 )
 
 import typing
@@ -66,6 +68,29 @@ NFL_COPY_ANALYSIS: typing.Final[str] = """-- name: NflCopyAnalysis :copyfrom
 INSERT INTO v2_nfl_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
+NFL_DEDUPE_RECENT_ANALYSIS: typing.Final[
+    str
+] = """-- name: NflDedupeRecentAnalysis :execrows
+WITH ranked AS (
+    SELECT
+        id,
+        row_number() OVER (
+            PARTITION BY
+                game_time,
+                game_tag,
+                (analysis->'input'->>'player_id')::int,
+                analysis->'input'->>'stat',
+                (analysis->'input'->>'line')::numeric
+            ORDER BY created_at DESC, id DESC
+        ) AS rn
+    FROM public.v2_nfl_daily_bets
+    WHERE created_at >= now() - make_interval(days => $1)
+)
+DELETE FROM public.v2_nfl_daily_bets b
+USING ranked r
+WHERE b.id = r.id AND r.rn > 1
+"""
+
 NFL_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: NflPlayersWithTeam :many
 SELECT p.id, p.team_id, p.name, p.height, p.position, p.injuries, p.is_rookie, T.team_code as team_abv FROM v3_nfl_players P
 INNER JOIN v3_nfl_teams T ON P.team_id = T.id
@@ -73,6 +98,33 @@ INNER JOIN v3_nfl_teams T ON P.team_id = T.id
 
 NFL_TEAMS: typing.Final[str] = """-- name: NflTeams :many
 SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed FROM v3_nfl_teams
+"""
+
+NFL_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NflUpsertAnalysis :one
+WITH updated AS (
+    UPDATE public.v2_nfl_daily_bets
+    SET
+        analysis = $1,
+        price = $2,
+        game_time = $3,
+        game_tag = $4,
+        created_at = now()
+    WHERE
+        game_time = $3
+        AND game_tag = $4
+        AND (analysis->'input'->>'player_id')::int =
+            ($1::json->'input'->>'player_id')::int
+        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+        AND (analysis->'input'->>'line')::numeric =
+            ($1::json->'input'->>'line')::numeric
+    RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_nfl_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
 """
 
 
@@ -136,6 +188,11 @@ async def nfl_copy_analysis(
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
+async def nfl_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
+    r = await conn.execute(NFL_DEDUPE_RECENT_ANALYSIS, days)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
 def nfl_players_with_team(conn: ConnectionLike) -> QueryResults[NflPlayersWithTeamRow]:
     def _decode_hook(row: asyncpg.Record) -> NflPlayersWithTeamRow:
         return NflPlayersWithTeamRow(
@@ -183,3 +240,15 @@ def nfl_teams(conn: ConnectionLike) -> QueryResults[models.V3NflTeam]:
         )
 
     return QueryResults[models.V3NflTeam](conn, NFL_TEAMS, _decode_hook)
+
+
+async def nfl_upsert_analysis(
+    conn: ConnectionLike,
+    *,
+    analysis: str,
+    price: float | None,
+    game_time: datetime.datetime,
+    game_tag: str,
+) -> int:
+    r = await conn.fetchval(NFL_UPSERT_ANALYSIS, analysis, price, game_time, game_tag)
+    return int(r or 0)

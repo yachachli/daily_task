@@ -8,16 +8,6 @@ SELECT * FROM nba_teams;
 -- name: NbaCopyAnalysis :copyfrom
 INSERT INTO v2_nba_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4);
 
--- name: NbaRecentBetKeys :many
-SELECT
-    game_time,
-    game_tag,
-    (analysis->'input'->>'player_id')::int AS player_id,
-    analysis->'input'->>'stat' AS stat,
-    (analysis->'input'->>'line')::float8 AS line
-FROM public.v2_nba_daily_bets
-WHERE created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1);
-
 -- name: NbaDedupeRecentAnalysis :execrows
 WITH ranked AS (
     SELECT
@@ -32,13 +22,13 @@ WITH ranked AS (
             ORDER BY created_at DESC, id DESC
         ) AS rn
     FROM public.v2_nba_daily_bets
-    WHERE created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1)
+    WHERE created_at >= now() - make_interval(days => $1)
 )
 DELETE FROM public.v2_nba_daily_bets b
 USING ranked r
 WHERE b.id = r.id AND r.rn > 1;
 
--- name: NbaUpsertAnalysis :execrows
+-- name: NbaUpsertAnalysis :one
 WITH updated AS (
     UPDATE public.v2_nba_daily_bets
     SET
@@ -56,7 +46,10 @@ WITH updated AS (
         AND (analysis->'input'->>'line')::numeric =
             ($1::json->'input'->>'line')::numeric
     RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_nba_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
 )
-INSERT INTO public.v2_nba_daily_bets (analysis, price, game_time, game_tag)
-SELECT $1, $2, $3, $4
-WHERE NOT EXISTS (SELECT 1 FROM updated);
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted);

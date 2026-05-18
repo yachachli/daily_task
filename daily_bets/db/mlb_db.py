@@ -8,8 +8,10 @@ __all__: collections.abc.Sequence[str] = (
     "MlbCopyAnalysisParams",
     "QueryResults",
     "mlb_copy_analysis",
+    "mlb_dedupe_recent_analysis",
     "mlb_players",
     "mlb_teams",
+    "mlb_upsert_analysis",
 )
 
 import typing
@@ -54,12 +56,62 @@ MLB_COPY_ANALYSIS: typing.Final[str] = """-- name: MlbCopyAnalysis :copyfrom
 INSERT INTO v2_mlb_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
+MLB_DEDUPE_RECENT_ANALYSIS: typing.Final[
+    str
+] = """-- name: MlbDedupeRecentAnalysis :execrows
+WITH ranked AS (
+    SELECT
+        id,
+        row_number() OVER (
+            PARTITION BY
+                game_time,
+                game_tag,
+                (analysis->'input'->>'player_id')::int,
+                analysis->'input'->>'stat',
+                (analysis->'input'->>'line')::numeric
+            ORDER BY created_at DESC, id DESC
+        ) AS rn
+    FROM public.v2_mlb_daily_bets
+    WHERE created_at >= now() - make_interval(days => $1)
+)
+DELETE FROM public.v2_mlb_daily_bets b
+USING ranked r
+WHERE b.id = r.id AND r.rn > 1
+"""
+
 MLB_PLAYERS: typing.Final[str] = """-- name: MlbPlayers :many
 SELECT id, player_id, long_name, team_abv, pos, height, weight, bat, throw, b_day, mlb_headshot, espn_headshot, espn_status, injury_description, injury_return FROM mlb_players
 """
 
 MLB_TEAMS: typing.Final[str] = """-- name: MlbTeams :many
 SELECT team_abv, team_city, team_name, conference, division, rs, ra, wins, losses, run_diff FROM mlb_teams
+"""
+
+MLB_UPSERT_ANALYSIS: typing.Final[str] = """-- name: MlbUpsertAnalysis :one
+WITH updated AS (
+    UPDATE public.v2_mlb_daily_bets
+    SET
+        analysis = $1,
+        price = $2,
+        game_time = $3,
+        game_tag = $4,
+        created_at = now()
+    WHERE
+        game_time = $3
+        AND game_tag = $4
+        AND (analysis->'input'->>'player_id')::int =
+            ($1::json->'input'->>'player_id')::int
+        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+        AND (analysis->'input'->>'line')::numeric =
+            ($1::json->'input'->>'line')::numeric
+    RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_mlb_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
 """
 
 
@@ -123,6 +175,11 @@ async def mlb_copy_analysis(
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
+async def mlb_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
+    r = await conn.execute(MLB_DEDUPE_RECENT_ANALYSIS, days)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
 def mlb_players(conn: ConnectionLike) -> QueryResults[models.MlbPlayer]:
     def _decode_hook(row: asyncpg.Record) -> models.MlbPlayer:
         return models.MlbPlayer(
@@ -162,3 +219,15 @@ def mlb_teams(conn: ConnectionLike) -> QueryResults[models.MlbTeam]:
         )
 
     return QueryResults[models.MlbTeam](conn, MLB_TEAMS, _decode_hook)
+
+
+async def mlb_upsert_analysis(
+    conn: ConnectionLike,
+    *,
+    analysis: str,
+    price: float,
+    game_time: datetime.datetime,
+    game_tag: str,
+) -> int:
+    r = await conn.fetchval(MLB_UPSERT_ANALYSIS, analysis, price, game_time, game_tag)
+    return int(r or 0)

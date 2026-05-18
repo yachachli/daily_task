@@ -7,12 +7,10 @@ from __future__ import annotations
 __all__: collections.abc.Sequence[str] = (
     "NbaCopyAnalysisParams",
     "NbaPlayersWithTeamRow",
-    "NbaRecentBetKeysRow",
     "QueryResults",
     "nba_copy_analysis",
     "nba_dedupe_recent_analysis",
     "nba_players_with_team",
-    "nba_recent_bet_keys",
     "nba_teams",
     "nba_upsert_analysis",
 )
@@ -64,14 +62,6 @@ class NbaPlayersWithTeamRow(msgspec.Struct):
     team_abv: str
 
 
-class NbaRecentBetKeysRow(msgspec.Struct):
-    game_time: datetime.datetime
-    game_tag: str
-    player_id: int
-    stat: typing.Any | None
-    line: float
-
-
 NBA_COPY_ANALYSIS: typing.Final[str] = """-- name: NbaCopyAnalysis :copyfrom
 INSERT INTO v2_nba_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
@@ -92,7 +82,7 @@ WITH ranked AS (
             ORDER BY created_at DESC, id DESC
         ) AS rn
     FROM public.v2_nba_daily_bets
-    WHERE created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1)
+    WHERE created_at >= now() - make_interval(days => $1)
 )
 DELETE FROM public.v2_nba_daily_bets b
 USING ranked r
@@ -104,22 +94,11 @@ SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury,
 INNER JOIN nba_teams T ON P.team_id = T.id
 """
 
-NBA_RECENT_BET_KEYS: typing.Final[str] = """-- name: NbaRecentBetKeys :many
-SELECT
-    game_time,
-    game_tag,
-    (analysis->'input'->>'player_id')::int AS player_id,
-    analysis->'input'->>'stat' AS stat,
-    (analysis->'input'->>'line')::float8 AS line
-FROM public.v2_nba_daily_bets
-WHERE created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - make_interval(days => $1)
-"""
-
 NBA_TEAMS: typing.Final[str] = """-- name: NbaTeams :many
 SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, division, team_bpg, team_spg, team_apg, team_fga, team_fgm, team_fta, team_tov, pace, def_rtg FROM nba_teams
 """
 
-NBA_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NbaUpsertAnalysis :execrows
+NBA_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NbaUpsertAnalysis :one
 WITH updated AS (
     UPDATE public.v2_nba_daily_bets
     SET
@@ -137,10 +116,13 @@ WITH updated AS (
         AND (analysis->'input'->>'line')::numeric =
             ($1::json->'input'->>'line')::numeric
     RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_nba_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
 )
-INSERT INTO public.v2_nba_daily_bets (analysis, price, game_time, game_tag)
-SELECT $1, $2, $3, $4
-WHERE NOT EXISTS (SELECT 1 FROM updated)
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
 """
 
 
@@ -227,23 +209,6 @@ def nba_players_with_team(conn: ConnectionLike) -> QueryResults[NbaPlayersWithTe
     )
 
 
-def nba_recent_bet_keys(
-    conn: ConnectionLike, *, days: int
-) -> QueryResults[NbaRecentBetKeysRow]:
-    def _decode_hook(row: asyncpg.Record) -> NbaRecentBetKeysRow:
-        return NbaRecentBetKeysRow(
-            game_time=row[0],
-            game_tag=row[1],
-            player_id=row[2],
-            stat=row[3],
-            line=row[4],
-        )
-
-    return QueryResults[NbaRecentBetKeysRow](
-        conn, NBA_RECENT_BET_KEYS, _decode_hook, days
-    )
-
-
 def nba_teams(conn: ConnectionLike) -> QueryResults[models.NbaTeam]:
     def _decode_hook(row: asyncpg.Record) -> models.NbaTeam:
         return models.NbaTeam(
@@ -279,5 +244,5 @@ async def nba_upsert_analysis(
     game_time: datetime.datetime,
     game_tag: str,
 ) -> int:
-    r = await conn.execute(NBA_UPSERT_ANALYSIS, analysis, price, game_time, game_tag)
-    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+    r = await conn.fetchval(NBA_UPSERT_ANALYSIS, analysis, price, game_time, game_tag)
+    return int(r or 0)

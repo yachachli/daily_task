@@ -325,5 +325,16 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.mlb_copy_analysis(conn, params=copy_params)
-    print(f"Inserted {copy_count} records")
+        dedupe_count = await db.mlb_dedupe_recent_analysis(conn, days=1)
+        if dedupe_count:
+            logger.info(f"Deleted {dedupe_count} recent duplicate MLB bets")
+        write_count = 0
+        for param in copy_params:
+            write_count += await db.mlb_upsert_analysis(
+                conn,
+                analysis=param.analysis,
+                price=param.price,
+                game_time=param.game_time,
+                game_tag=param.game_tag,
+            )
+    print(f"Wrote {write_count} records")

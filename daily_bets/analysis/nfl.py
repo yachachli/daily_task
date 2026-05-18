@@ -133,7 +133,12 @@ def do_analysis(
     stat: str,
 ) -> ResultAsync[
     db.NflCopyAnalysisParams,
-    NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
+    NoTeamFoundError
+    | NoPlayerFoundError
+    | HttpError
+    | DecodeError
+    | SkipBetError
+    | Exception,
 ]:
     team_abv_player: str | None
     team_abv_opponent: str | None
@@ -348,10 +353,21 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.nfl_copy_analysis(conn, params=copy_params)
+        dedupe_count = await db.nfl_dedupe_recent_analysis(conn, days=1)
+        if dedupe_count:
+            logger.info(f"Deleted {dedupe_count} recent duplicate NFL bets")
+        write_count = 0
+        for param in copy_params:
+            write_count += await db.nfl_upsert_analysis(
+                conn,
+                analysis=param.analysis,
+                price=param.price,
+                game_time=param.game_time,
+                game_tag=param.game_tag,
+            )
         try:
             backup_inserted = await nfl_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
-    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
+    print(f"Wrote {write_count} records; backup sync inserted {backup_inserted}")

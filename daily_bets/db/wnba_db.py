@@ -9,8 +9,10 @@ __all__: collections.abc.Sequence[str] = (
     "WnbaCopyAnalysisParams",
     "WnbaPlayersWithTeamRow",
     "wnba_copy_analysis",
+    "wnba_dedupe_recent_analysis",
     "wnba_players_with_team",
     "wnba_teams",
+    "wnba_upsert_analysis",
 )
 
 import typing
@@ -66,6 +68,29 @@ WNBA_COPY_ANALYSIS: typing.Final[str] = """-- name: WnbaCopyAnalysis :copyfrom
 INSERT INTO v2_wnba_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4)
 """
 
+WNBA_DEDUPE_RECENT_ANALYSIS: typing.Final[
+    str
+] = """-- name: WnbaDedupeRecentAnalysis :execrows
+WITH ranked AS (
+    SELECT
+        id,
+        row_number() OVER (
+            PARTITION BY
+                game_time,
+                game_tag,
+                (analysis->'input'->>'player_id')::int,
+                analysis->'input'->>'stat',
+                (analysis->'input'->>'line')::numeric
+            ORDER BY created_at DESC, id DESC
+        ) AS rn
+    FROM public.v2_wnba_daily_bets
+    WHERE created_at >= now() - make_interval(days => $1)
+)
+DELETE FROM public.v2_wnba_daily_bets b
+USING ranked r
+WHERE b.id = r.id AND r.rn > 1
+"""
+
 WNBA_PLAYERS_WITH_TEAM: typing.Final[str] = """-- name: WnbaPlayersWithTeam :many
 SELECT p.id, p.name, p.position, p.team_id, p.player_pic, p.player_id, p.injury, T.team_abv FROM wnba_players P
 INNER JOIN wnba_teams T ON P.team_id = T.id
@@ -73,6 +98,33 @@ INNER JOIN wnba_teams T ON P.team_id = T.id
 
 WNBA_TEAMS: typing.Final[str] = """-- name: WnbaTeams :many
 SELECT id, name, team_city, team_abv, conference, ppg, oppg, wins, loss, team_bpg, team_spg, team_apg, team_fga, team_fgm, team_fta, team_tov FROM wnba_teams
+"""
+
+WNBA_UPSERT_ANALYSIS: typing.Final[str] = """-- name: WnbaUpsertAnalysis :one
+WITH updated AS (
+    UPDATE public.v2_wnba_daily_bets
+    SET
+        analysis = $1,
+        price = $2,
+        game_time = $3,
+        game_tag = $4,
+        created_at = now()
+    WHERE
+        game_time = $3
+        AND game_tag = $4
+        AND (analysis->'input'->>'player_id')::int =
+            ($1::json->'input'->>'player_id')::int
+        AND analysis->'input'->>'stat' = ($1::json->'input'->>'stat')
+        AND (analysis->'input'->>'line')::numeric =
+            ($1::json->'input'->>'line')::numeric
+    RETURNING 1
+), inserted AS (
+    INSERT INTO public.v2_wnba_daily_bets (analysis, price, game_time, game_tag)
+    SELECT $1, $2, $3, $4
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM updated) + (SELECT count(*) FROM inserted)
 """
 
 
@@ -136,6 +188,11 @@ async def wnba_copy_analysis(
     return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
 
 
+async def wnba_dedupe_recent_analysis(conn: ConnectionLike, *, days: int) -> int:
+    r = await conn.execute(WNBA_DEDUPE_RECENT_ANALYSIS, days)
+    return int(n) if (p := r.split()) and (n := p[-1]).isdigit() else 0
+
+
 def wnba_players_with_team(
     conn: ConnectionLike,
 ) -> QueryResults[WnbaPlayersWithTeamRow]:
@@ -178,3 +235,15 @@ def wnba_teams(conn: ConnectionLike) -> QueryResults[models.WnbaTeam]:
         )
 
     return QueryResults[models.WnbaTeam](conn, WNBA_TEAMS, _decode_hook)
+
+
+async def wnba_upsert_analysis(
+    conn: ConnectionLike,
+    *,
+    analysis: str,
+    price: float | None,
+    game_time: datetime.datetime,
+    game_tag: str,
+) -> int:
+    r = await conn.fetchval(WNBA_UPSERT_ANALYSIS, analysis, price, game_time, game_tag)
+    return int(r or 0)

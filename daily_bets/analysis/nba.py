@@ -289,10 +289,21 @@ async def run(pool: DBPool):
             # fmt: on
 
     async with pool.acquire() as conn:
-        copy_count = await db.nba_alt_copy_analysis(conn, params=copy_params)
+        dedupe_count = await db.nba_alt_dedupe_recent_analysis(conn, days=1)
+        if dedupe_count:
+            logger.info(f"Deleted {dedupe_count} recent duplicate NBA alt bets")
+        write_count = 0
+        for param in copy_params:
+            write_count += await db.nba_alt_upsert_analysis(
+                conn,
+                analysis=param.analysis,
+                price=param.price,
+                game_time=param.game_time,
+                game_tag=param.game_tag,
+            )
         try:
             backup_inserted = await nba_alt_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
-    print(f"Inserted {copy_count} records; backup sync inserted {backup_inserted}")
+    print(f"Wrote {write_count} records; backup sync inserted {backup_inserted}")
