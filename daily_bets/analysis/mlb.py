@@ -7,10 +7,7 @@ import msgspec
 from dateutil.parser import parse as parse_datetime
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.analysis.existing_bets import (
-    fetch_recent_analysis_keys,
-    make_existing_bet_key,
-)
+from daily_bets.analysis.existing_bets import make_existing_bet_key
 from daily_bets.db import mlb_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
@@ -230,9 +227,17 @@ async def filter_existing_analysis_params(
     skipped_count = 0
     unresolved_count = 0
     async with pool.acquire() as conn:
-        existing_keys = await fetch_recent_analysis_keys(
-            conn, "public.v2_mlb_daily_bets", days=1
-        )
+        existing_keys = {
+            make_existing_bet_key(
+                row.game_time,
+                row.game_tag,
+                row.player_id,
+                row.stat,
+                row.line,
+            )
+            for row in await db.mlb_recent_analysis_keys(conn, days=1)
+            if row.stat is not None
+        }
         for event, outcome, stat in params:
             resolved = resolve_player_context(mlb_map, event, outcome.description)
             if not resolved:
