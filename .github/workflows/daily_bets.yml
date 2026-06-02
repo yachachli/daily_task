@@ -2,8 +2,8 @@ name: Daily Bets Analysis
 
 on:
   schedule:
-    # 5 AM Pacific / 13 UTC
-    - cron: "0 13 * * *"
+    # 14:00 UTC (7:00 AM PDT / 10:00 AM EDT) - 2.5h after the MLB DB update at 11:30 UTC
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 jobs:
