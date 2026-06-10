@@ -23,15 +23,23 @@ import json
 import logging
 import os
 
+try:
+    from dotenv import load_dotenv
+
+    _ = load_dotenv()
+except ImportError:
+    pass
+
 import asyncpg
 import httpx
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-WC_ANALYSIS_API_URL = os.environ.get(
-    "WC_ANALYSIS_API_URL",
-    "https://us-central1-bestbet-d4d6b.cloudfunctions.net/wc_analysis",
+# `or` (not a default arg) so an empty env value still falls back to the URL.
+WC_ANALYSIS_API_URL = (
+    os.environ.get("WC_ANALYSIS_API_URL")
+    or "https://us-central1-bestbet-d4d6b.cloudfunctions.net/wc_analysis"
 )
 
 MIGRATE_SQL = """
