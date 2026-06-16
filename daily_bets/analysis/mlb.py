@@ -29,7 +29,7 @@ from daily_bets.utils import batch_calls_result_async, normalize_name
 
 SPORT_KEY = "baseball_mlb"
 REGION = "us_dfs"
-MAX_BETS_PER_TEAM_PER_GAME = 1
+MAX_BETS_PER_TEAM_PER_GAME = 20
 
 MARKET_TO_STAT = {
     "batter_home_runs": "home runs",
