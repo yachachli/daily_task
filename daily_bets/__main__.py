@@ -8,7 +8,7 @@ except ImportError:
 import asyncio
 import sys
 
-from daily_bets.analysis import mlb, nba, nba_alt, nfl, wnba
+from daily_bets.analysis import mlb, mlb_es_test, nba, nba_alt, nfl, wnba
 from daily_bets.db_pool import db_pool
 from daily_bets.logger import logger, setup_logging
 
@@ -36,6 +36,8 @@ async def main():
             await nba_alt.run(pool)
         case "wnba":
             await wnba.run(pool)
+        case "mlb_es_test":
+            await mlb_es_test.run(pool)
         case _:
             logger.error(
                 f"Invalid argument: {sys.argv[1]}. Expected: 'nfl', 'mlb', 'nba', 'nba_alt', or 'wnba'"
