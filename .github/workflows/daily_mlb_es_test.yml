@@ -17,7 +17,7 @@ jobs:
           NBA_ALT_ANALYSIS_API_URL: ${{ secrets.NBA_ALT_ANALYSIS_API_URL }}
           NFL_ANALYSIS_API_URL: ${{ secrets.NFL_ANALYSIS_API_URL }}
           WNBA_ANALYSIS_API_URL: ${{ secrets.WNBA_ANALYSIS_API_URL }}
-          TRANSLATE_ES_URL: ${{ secrets.TRANSLATE_ES_URL }}
+          TRANSLATE_ES_URL: https://us-central1-bestbet-d4d6b.cloudfunctions.net/translate_analysis_es_test
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASS: ${{ secrets.DB_PASS }}
