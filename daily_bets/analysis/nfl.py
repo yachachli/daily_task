@@ -1,4 +1,5 @@
 import asyncio
+import json
 import typing as t
 from datetime import date, datetime, timedelta, timezone
 
@@ -435,17 +436,39 @@ async def run(pool: DBPool):
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate NFL bets")
         upsert_count = 0
-        for param in copy_params:
-            upsert_count += (
-                await db.nfl_upsert_analysis(
-                    conn,
-                    analysis_json=param.analysis,
-                    price=param.price,
-                    game_time=param.game_time,
-                    game_tag=param.game_tag,
+        async with httpx.AsyncClient() as translate_client:
+            for param in copy_params:
+                inserted = (
+                    await db.nfl_upsert_analysis(
+                        conn,
+                        analysis_json=param.analysis,
+                        price=param.price,
+                        game_time=param.game_time,
+                        game_tag=param.game_tag,
+                    )
+                    or 0
                 )
-                or 0
-            )
+                upsert_count += inserted
+                if inserted and Env.TRANSLATE_ES_URL:
+                    try:
+                        res = await translate_client.post(
+                            Env.TRANSLATE_ES_URL,
+                            json={"analysis": param.analysis},
+                            timeout=30,
+                        )
+                        if res.is_success:
+                            analysis_es = res.json()["analysis_es"]
+                            await conn.execute(
+                                "UPDATE v2_nfl_daily_bets SET analysis_es = $1 "
+                                "WHERE game_time = $2 AND game_tag = $3 "
+                                "AND analysis->>'short_answer' = $4",
+                                analysis_es,
+                                param.game_time,
+                                param.game_tag,
+                                json.loads(param.analysis)["short_answer"],
+                            )
+                    except Exception as e:
+                        logger.warning(f"ES translation failed: {e!r}")
         try:
             backup_inserted = await nfl_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:

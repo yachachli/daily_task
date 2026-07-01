@@ -43,4 +43,5 @@ jobs:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASS: ${{ secrets.DB_PASS }}
           DB_HOST: ${{ secrets.DB_HOST }}
+          TRANSLATE_ES_URL: ${{ vars.TRANSLATE_ES_URL }}
         run: uv run -m daily_bets ${{ matrix.sport }}
