@@ -1,4 +1,5 @@
 import asyncio
+import json
 import typing as t
 from datetime import date, datetime, timedelta, timezone
 
@@ -367,17 +368,48 @@ async def run(pool: DBPool):
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate NBA bets")
         upsert_count = 0
-        for param in copy_params:
-            upsert_count += (
-                await db.nba_upsert_analysis(
-                    conn,
-                    analysis_json=param.analysis,
-                    price=param.price,
-                    game_time=param.game_time,
-                    game_tag=param.game_tag,
-                )
-                or 0
+        translate_url = getattr(Env, "TRANSLATE_ES_URL", "") or ""
+        if not translate_url:
+            logger.warning(
+                "TRANSLATE_ES_URL is not set — new bets will NOT get Spanish translations"
             )
+        async with httpx.AsyncClient() as translate_client:
+            for param in copy_params:
+                inserted = (
+                    await db.nba_upsert_analysis(
+                        conn,
+                        analysis_json=param.analysis,
+                        price=param.price,
+                        game_time=param.game_time,
+                        game_tag=param.game_tag,
+                    )
+                    or 0
+                )
+                upsert_count += inserted
+                if inserted and translate_url:
+                    try:
+                        res = await translate_client.post(
+                            translate_url,
+                            json={"analysis": param.analysis},
+                            timeout=30,
+                        )
+                        if res.is_success:
+                            analysis_es = res.json()["analysis_es"]
+                            await conn.execute(
+                                "UPDATE v2_nba_daily_bets SET analysis_es = $1 "
+                                "WHERE game_time = $2 AND game_tag = $3 "
+                                "AND analysis->>'short_answer' = $4",
+                                analysis_es,
+                                param.game_time,
+                                param.game_tag,
+                                json.loads(param.analysis)["short_answer"],
+                            )
+                        else:
+                            logger.warning(
+                                f"ES translation HTTP {res.status_code} for {param.game_tag}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"ES translation failed for {param.game_tag}: {e!r}")
         try:
             backup_inserted = await nba_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:

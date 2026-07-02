@@ -45,6 +45,7 @@ WC_ANALYSIS_API_URL = (
 MIGRATE_SQL = """
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS analysis TEXT;
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS analysis_generated_at TIMESTAMPTZ;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS analysis_es TEXT;
 """
 
 # Fixtures with a real (non-degenerate) prediction whose analysis is missing
@@ -65,8 +66,8 @@ ORDER BY f.scheduled_at ASC
 """
 
 UPDATE_SQL = """
-UPDATE predictions SET analysis = $1, analysis_generated_at = now()
-WHERE fixture_id = $2
+UPDATE predictions SET analysis = $1, analysis_es = $2, analysis_generated_at = now()
+WHERE fixture_id = $3
 """
 
 
@@ -125,6 +126,7 @@ async def main() -> int:
                     resp = await client.post(WC_ANALYSIS_API_URL, json=payload)
                     resp.raise_for_status()
                     analysis = resp.json().get("analysis")
+                    analysis_es = resp.json().get("analysis_es")
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
                         "Analysis failed for fixture %s (%s vs %s): %s",
@@ -137,7 +139,7 @@ async def main() -> int:
                     failed += 1
                     continue
 
-                await conn.execute(UPDATE_SQL, analysis, r["fixture_id"])
+                await conn.execute(UPDATE_SQL, analysis, analysis_es, r["fixture_id"])
                 generated += 1
                 logger.info(
                     "Analyzed fixture %s: %s vs %s",

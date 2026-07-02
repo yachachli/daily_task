@@ -21,3 +21,4 @@ class Env:
     NFL_ANALYSIS_API_URL = os.environ["NFL_ANALYSIS_API_URL"]
     MLB_ANALYSIS_API_URL = os.environ["MLB_ANALYSIS_API_URL"]
     WNBA_ANALYSIS_API_URL = os.environ["WNBA_ANALYSIS_API_URL"]
+    TRANSLATE_ES_URL = os.environ.get("TRANSLATE_ES_URL", "")
