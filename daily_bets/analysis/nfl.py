@@ -436,10 +436,19 @@ async def run(pool: DBPool):
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate NFL bets")
         upsert_count = 0
-        translate_url = getattr(Env, "TRANSLATE_ES_URL", "") or ""
-        if not translate_url:
+        # Generic multi-language translation. TRANSLATE_URL (the language-
+        # agnostic endpoint) + TRANSLATE_LANGUAGES drive the loop; if only the
+        # legacy TRANSLATE_ES_URL is set, behave exactly as before (es only).
+        translate_url = getattr(Env, "TRANSLATE_URL", "") or ""
+        legacy_es_url = getattr(Env, "TRANSLATE_ES_URL", "") or ""
+        languages = [
+            lang.strip()
+            for lang in (getattr(Env, "TRANSLATE_LANGUAGES", "") or "es").split(",")
+            if lang.strip().isalpha() and len(lang.strip()) == 2
+        ] if translate_url else ["es"]
+        if not translate_url and not legacy_es_url:
             logger.warning(
-                "TRANSLATE_ES_URL is not set — new bets will NOT get Spanish translations"
+                "TRANSLATE_URL / TRANSLATE_ES_URL are not set — new bets will NOT get translations"
             )
         async with httpx.AsyncClient() as translate_client:
             for param in copy_params:
@@ -454,30 +463,41 @@ async def run(pool: DBPool):
                     or 0
                 )
                 upsert_count += inserted
-                if inserted and translate_url:
-                    try:
-                        res = await translate_client.post(
-                            translate_url,
-                            json={"analysis": param.analysis},
-                            timeout=30,
-                        )
-                        if res.is_success:
-                            analysis_es = res.json()["analysis_es"]
-                            await conn.execute(
-                                "UPDATE v2_nfl_daily_bets SET analysis_es = $1 "
-                                "WHERE game_time = $2 AND game_tag = $3 "
-                                "AND analysis->>'short_answer' = $4",
-                                analysis_es,
-                                param.game_time,
-                                param.game_tag,
-                                json.loads(param.analysis)["short_answer"],
-                            )
-                        else:
-                            logger.warning(
-                                f"ES translation HTTP {res.status_code} for {param.game_tag}"
-                            )
-                    except Exception as e:
-                        logger.warning(f"ES translation failed for {param.game_tag}: {e!r}")
+                if inserted and (translate_url or legacy_es_url):
+                    for lang in languages:
+                        try:
+                            if translate_url:
+                                res = await translate_client.post(
+                                    translate_url,
+                                    json={"analysis": param.analysis, "target_language": lang},
+                                    timeout=30,
+                                )
+                                translated = res.json()["analysis_translated"] if res.is_success else None
+                            else:
+                                res = await translate_client.post(
+                                    legacy_es_url,
+                                    json={"analysis": param.analysis},
+                                    timeout=30,
+                                )
+                                translated = res.json()["analysis_es"] if res.is_success else None
+                            if translated is not None:
+                                # lang is allowlisted above (2 ascii letters), safe to
+                                # interpolate as a column suffix.
+                                await conn.execute(
+                                    f"UPDATE v2_nfl_daily_bets SET analysis_{lang} = $1 "
+                                    "WHERE game_time = $2 AND game_tag = $3 "
+                                    "AND analysis->>'short_answer' = $4",
+                                    translated,
+                                    param.game_time,
+                                    param.game_tag,
+                                    json.loads(param.analysis)["short_answer"],
+                                )
+                            else:
+                                logger.warning(
+                                    f"{lang} translation HTTP {res.status_code} for {param.game_tag}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"{lang} translation failed for {param.game_tag}: {e!r}")
         try:
             backup_inserted = await nfl_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:

@@ -22,3 +22,7 @@ class Env:
     MLB_ANALYSIS_API_URL = os.environ["MLB_ANALYSIS_API_URL"]
     WNBA_ANALYSIS_API_URL = os.environ["WNBA_ANALYSIS_API_URL"]
     TRANSLATE_ES_URL = os.environ.get("TRANSLATE_ES_URL", "")
+    # Language-agnostic translate endpoint + comma-separated target languages.
+    # When TRANSLATE_URL is set it takes precedence over TRANSLATE_ES_URL.
+    TRANSLATE_URL = os.environ.get("TRANSLATE_URL", "")
+    TRANSLATE_LANGUAGES = os.environ.get("TRANSLATE_LANGUAGES", "es")
