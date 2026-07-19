@@ -1,0 +1,40 @@
+name: Generate MLB Game Deep Analysis
+
+on:
+  schedule:
+    # 13:30 UTC — after the propgpt-mlb predict_slate run (13:00 UTC) upserts
+    # the day's predictions. A second pass after the 20:30 UTC refresh picks
+    # up re-predicted games (late pitcher changes) and tomorrow's early slate.
+    - cron: "30 13 * * *"
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+jobs:
+  generate-mlb-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Generate MLB game deep analysis to Neon
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          # Optional override; defaults to the deployed function in the script.
+          MLB_ANALYSIS_GAME_API_URL: ${{ vars.MLB_ANALYSIS_GAME_API_URL }}
+        run: uv run -m daily_bets.scripts.generate_mlb_analysis
