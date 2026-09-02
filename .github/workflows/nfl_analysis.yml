@@ -1,0 +1,43 @@
+name: Generate NFL Game Deep Analysis
+
+on:
+  schedule:
+    # 16:00 UTC Thu — after the nfl-propgpt-model early card (15:00 UTC).
+    # 16:00 UTC Sat — after the primary card (15:00 UTC) re-predicts with
+    # fresh lines/injuries; stale rows get regenerated.
+    # 14:30 UTC Sun — safety pass before the early kickoffs (17:00 UTC).
+    - cron: "0 16 * * 4"
+    - cron: "0 16 * * 6"
+    - cron: "30 14 * * 0"
+  workflow_dispatch:
+
+jobs:
+  generate-nfl-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Generate NFL game deep analysis to Neon
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASS: ${{ secrets.DB_PASS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          # Optional override; defaults to the deployed function in the script.
+          # This is the GAME function; NFL_ANALYSIS_API_URL is the player-prop one.
+          NFL_ANALYSIS_GAME_API_URL: ${{ vars.NFL_ANALYSIS_GAME_API_URL }}
+        run: uv run -m daily_bets.scripts.generate_nfl_analysis
