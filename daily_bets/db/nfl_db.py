@@ -108,7 +108,7 @@ WHERE created_at >= now() - make_interval(days => $1)
 """
 
 NFL_TEAMS: typing.Final[str] = """-- name: NflTeams :many
-SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed, new_notes, team_logo, offense_notes, schedule_2025 FROM v3_nfl_teams
+SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed, "new notes" AS new_notes, team_logo, offense_notes, schedule_2025 FROM v3_nfl_teams
 """
 
 NFL_UPSERT_ANALYSIS: typing.Final[str] = """-- name: NflUpsertAnalysis :one

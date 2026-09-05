@@ -3,7 +3,9 @@ SELECT P.*, T.team_code as team_abv FROM v3_nfl_players P
 INNER JOIN v3_nfl_teams T ON P.team_id = T.id;
 
 -- name: NflTeams :many
-SELECT * FROM v3_nfl_teams;
+-- The notes column on the live table is literally named "new notes" (with a space);
+-- alias it so the generated struct keeps its new_notes field.
+SELECT id, name, team_code, wins, losses, ties, points_for, points_against, total_tackles, fumbles_lost, defensive_touchdowns, fumbles_recovered, solo_tackles, defensive_interceptions, qb_hits, tackles_for_loss, pass_deflections, sacks, fumbles, passing_td_allowed, passing_yards_allowed, rushing_yards_allowed, rushing_td_allowed, "new notes" AS new_notes, team_logo, offense_notes, schedule_2025 FROM v3_nfl_teams;
 
 -- name: NflCopyAnalysis :copyfrom
 INSERT INTO v2_nfl_daily_bets (analysis, price, game_time, game_tag) VALUES ($1, $2, $3, $4);
