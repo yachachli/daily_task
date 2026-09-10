@@ -62,11 +62,22 @@ async def sync_recent_to_backup(conn: ConnectionLike, *, days: int = 14) -> int:
     """
     command_tag = await conn.execute(
         """
-        INSERT INTO public.v2_nfl_daily_bets_backup (id, analysis, created_at, price, game_time, game_tag)
-        SELECT b.id, b.analysis, b.created_at, b.price, b.game_time, b.game_tag
+        INSERT INTO public.v2_nfl_daily_bets_backup
+            (id, analysis, created_at, price, game_time, game_tag, analysis_es)
+        SELECT b.id, b.analysis, b.created_at, b.price, b.game_time, b.game_tag,
+               b.analysis_es
         FROM public.v2_nfl_daily_bets b
         WHERE b.created_at > now() - make_interval(days => $1)
-        ON CONFLICT (id) DO NOTHING
+        -- analysis_es is written by the translation step *after* the bet is
+        -- created, so a row archived on day one has NULL Spanish and DO NOTHING
+        -- would leave it NULL forever -- the primary row is deleted once its
+        -- game kicks off, and the translation would be lost with it. Fill it in
+        -- on a later pass instead, and only when it is still missing, so this
+        -- can never overwrite an archived translation with a newer NULL.
+        ON CONFLICT (id) DO UPDATE
+            SET analysis_es = EXCLUDED.analysis_es
+            WHERE public.v2_nfl_daily_bets_backup.analysis_es IS NULL
+              AND EXCLUDED.analysis_es IS NOT NULL
         """,
         days,
     )
