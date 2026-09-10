@@ -28,6 +28,10 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           NFL_ANALYSIS_API_URL: ${{ secrets.NFL_ANALYSIS_API_URL }}
           NBA_ANALYSIS_API_URL: ${{ secrets.NBA_ANALYSIS_API_URL }}
+          # Required by daily_bets.env.Env, which reads it with os.environ[...]
+          # at import time. Without it this job dies before it deletes anything
+          # -- it failed every night from the day the field was added.
+          NBA_ALT_ANALYSIS_API_URL: ${{ secrets.NBA_ALT_ANALYSIS_API_URL }}
           MLB_ANALYSIS_API_URL: ${{ secrets.MLB_ANALYSIS_API_URL }}
           WNBA_ANALYSIS_API_URL: ${{ secrets.WNBA_ANALYSIS_API_URL }}
           DB_NAME: ${{ secrets.DB_NAME }}
