@@ -9,6 +9,7 @@ from dateutil.parser import parse as parse_datetime
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
 from daily_bets.analysis.existing_bets import make_existing_bet_key
+from daily_bets.db import mlb_backup
 from daily_bets.db import mlb_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
@@ -426,4 +427,9 @@ async def run(pool: DBPool):
                             )
                     except Exception as e:
                         logger.warning(f"ES translation failed for {param.game_tag}: {e!r}")
-    print(f"Inserted {upsert_count} records")
+        try:
+            backup_inserted = await mlb_backup.run_backup_maintenance(conn, days=14)
+        except Exception as e:
+            logger.error(f"Backup maintenance failed: {e!r}")
+            backup_inserted = 0
+    print(f"Inserted {upsert_count} records; backup sync inserted {backup_inserted}")
