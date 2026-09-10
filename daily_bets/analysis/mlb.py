@@ -36,7 +36,8 @@ MARKET_TO_STAT = {
     "batter_home_runs": "home runs",
     "batter_hits": "hits",
     "batter_rbis": "rbi",
-    "batter_hits_runs_rbis": "hits + rbi",
+    # batter_hits_runs_rbis is really hits + runs + RBIs; it was mislabeled
+    # "hits + rbi" and is excluded from discovery at product request (Sept 2026).
 }
 
 TEAM_NAME_TO_ABV = {
