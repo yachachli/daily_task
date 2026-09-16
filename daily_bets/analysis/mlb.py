@@ -13,6 +13,7 @@ from daily_bets.db import mlb_db as db
 from daily_bets.db_pool import DBPool
 from daily_bets.env import Env
 from daily_bets.errors import (
+    SkipBetError,
     DecodeError,
     HttpError,
     NoPlayerFoundError,
@@ -27,6 +28,23 @@ from daily_bets.odds_api import (
     fetch_tomorrow_events,
 )
 from daily_bets.utils import batch_calls_result_async, normalize_name
+
+
+class _Recommendation(msgspec.Struct):
+    """Just the field we need from the backend response (extra keys ignored)."""
+
+    over_under: str | None = None
+
+
+def line_key(
+    event: SportEvent, outcome: Outcome, stat: str
+) -> tuple[str, str, str, float]:
+    return (event.id, outcome.description, stat, float(outcome.point))
+
+
+#: Both offered sides of one line, keyed by "over" / "under".
+Sides = dict[str, Outcome]
+
 
 SPORT_KEY = "baseball_mlb"
 REGION = "us_dfs"
@@ -152,15 +170,37 @@ def resolve_player_context(
     return None
 
 
+def _pick_offered_side(
+    analysis_text: str, posted: Outcome, sides: Sides | None
+) -> Outcome:
+    rec = msgspec.json.decode(analysis_text, type=_Recommendation).over_under
+    rec = rec.strip().lower() if rec else None
+    if rec is None or not sides:
+        return posted
+    chosen = sides.get(rec)
+    if chosen is None:
+        raise SkipBetError(
+            f"Backend recommends {rec} but the book offers only "
+            f"{'/'.join(sorted(sides))} for {posted.description} {posted.point}"
+        )
+    if chosen is not posted:
+        logger.info(
+            f"    Flipped to offered {rec} side for {posted.description} {posted.point} "
+            f"(price {posted.price} -> {chosen.price})"
+        )
+    return chosen
+
+
 def do_analysis(
     mlb_map: MlbMap,
     client: httpx.AsyncClient,
     event: SportEvent,
     outcome: Outcome,
     stat: str,
+    sides: Sides | None = None,
 ) -> ResultAsync[
     db.MlbCopyAnalysisParams,
-    NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
+    NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError | SkipBetError,
 ]:
     resolved = resolve_player_context(mlb_map, event, outcome.description)
     if not resolved:
@@ -209,10 +249,17 @@ def do_analysis(
             lambda res: res.text,
             lambda e: DecodeError(e),
         )
+        # The backend picks the side from the player's history; the row must
+        # carry the price of the side the book actually offers for that pick.
+        # If the book only offers the other side, there is nothing to sell.
+        .try_catch(
+            lambda text: (text, _pick_offered_side(text, outcome, sides)),
+            lambda e: e if isinstance(e, SkipBetError) else DecodeError(e),
+        )
         .map(
-            lambda analysis: db.MlbCopyAnalysisParams(
-                analysis=analysis,
-                price=outcome.price,
+            lambda pair: db.MlbCopyAnalysisParams(
+                analysis=pair[0],
+                price=pair[1].price,
                 game_time=parse_datetime(event.commence_time),
                 game_tag=game_tag,
             )
@@ -272,16 +319,19 @@ async def filter_existing_analysis_params(
 
 async def get_analysis_params(
     client: httpx.AsyncClient, tomorrow: date, mlb_map: MlbMap
-) -> list[tuple[SportEvent, Outcome, str]]:
+) -> tuple[
+    list[tuple[SportEvent, Outcome, str]], dict[tuple[str, str, str, float], Sides]
+]:
     params: list[tuple[SportEvent, Outcome, str]] = []
-    seen: set[tuple[SportEvent, Outcome, str]] = set()
+    seen: set[tuple[str, str, str, float]] = set()
+    sides_by_line: dict[tuple[str, str, str, float], Sides] = {}
 
     match await fetch_tomorrow_events(client, SPORT_KEY):
         case Ok(events):
             ...
         case Err() as e:
             logger.error(f"Error fetching tomorrow's MLB events: {e!r}")
-            return []
+            return [], {}
 
     for event in events:
         logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
@@ -296,7 +346,7 @@ async def get_analysis_params(
             case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
             case Err() as e:
                 logger.error(f"Error fetching game: {e!r}")
-                return []
+                return [], {}
         # fmt: on
 
         for bookmaker in game.bookmakers:
@@ -309,11 +359,16 @@ async def get_analysis_params(
                 if not stat:
                     continue
                 for outcome in market.outcomes:
-                    param = (event, outcome, stat)
-                    if param in seen:
+                    key = line_key(event, outcome, stat)
+                    side = outcome.name.strip().lower()
+                    sides = sides_by_line.setdefault(key, {})
+                    # Keep the first price seen per side (books are iterated in
+                    # payload order, same as before).
+                    _ = sides.setdefault(side, outcome)
+                    if key in seen:
                         continue
-                    seen.add(param)
-                    params.append(param)
+                    seen.add(key)
+                    params.append((event, outcome, stat))
 
     grouped_params: dict[tuple[str, str], list[tuple[SportEvent, Outcome, str]]] = (
         defaultdict(list)
@@ -342,7 +397,7 @@ async def get_analysis_params(
             MAX_BETS_PER_TEAM_PER_GAME,
         )
 
-    return [*limited_params, *unresolved_params]
+    return [*limited_params, *unresolved_params], sides_by_line
 
 
 async def run(pool: DBPool):
@@ -354,7 +409,9 @@ async def run(pool: DBPool):
     mlb_map = await MlbMap.from_db(pool)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        analysis_params = await get_analysis_params(client, tomorrow, mlb_map)
+        analysis_params, sides_by_line = await get_analysis_params(
+            client, tomorrow, mlb_map
+        )
         analysis_params = await filter_existing_analysis_params(
             pool, mlb_map, analysis_params
         )
@@ -367,6 +424,7 @@ async def run(pool: DBPool):
                     event,
                     outcome,
                     stat,
+                    sides_by_line.get(line_key(event, outcome, stat)),
                 )
                 for event, outcome, stat in analysis_params
             ],
@@ -377,6 +435,7 @@ async def run(pool: DBPool):
             # fmt: off
             match res:
                 case Ok(analysis_params): copy_params.append(analysis_params)  # noqa: E701
+                case Err(SkipBetError() as e): logger.info(f"Skipped outcome: {e}")  # noqa: E701
                 case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
             # fmt: on
 
@@ -426,5 +485,7 @@ async def run(pool: DBPool):
                                 f"ES translation HTTP {res.status_code} for {param.game_tag}"
                             )
                     except Exception as e:
-                        logger.warning(f"ES translation failed for {param.game_tag}: {e!r}")
+                        logger.warning(
+                            f"ES translation failed for {param.game_tag}: {e!r}"
+                        )
     print(f"Inserted {upsert_count} records")
