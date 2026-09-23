@@ -59,41 +59,6 @@ MARKET_TO_STAT = {
     # "hits + rbi" and is excluded from discovery at product request (Sept 2026).
 }
 
-#: Pitching markets, analysed by v2_mlb_pitcher_pou rather than the hitter
-#: endpoint. Kept in a separate map, and fetched in a separate request, for two
-#: reasons: the stat decides which backend analyses it, and a market key the
-#: books do not offer must not be able to take the hitter slate down with it --
-#: fetch_game failing returns [] and abandons every event.
-#:
-#: Keep the stat names in sync with MARKETS in
-#: bestbet_backend/src/mlb_pitcher_pou/api_calls.py.
-PITCHER_MARKET_TO_STAT = {
-    "pitcher_strikeouts": "pitcher strikeouts",
-    "pitcher_outs": "pitcher outs",
-    "pitcher_hits_allowed": "hits allowed",
-    "pitcher_walks": "walks allowed",
-    "pitcher_earned_runs": "earned runs allowed",
-}
-
-#: A game fields one starter a side, so this is a handful of rows per team --
-#: nothing like the nine-plus hitters MAX_BETS_PER_TEAM_PER_GAME exists to trim.
-#: Counted separately so a team's hitters cannot crowd its starter off the
-#: board: appended after them, pitcher outcomes would be the first trimmed.
-MAX_PITCHER_BETS_PER_TEAM_PER_GAME = 8
-
-
-def is_pitcher_stat(stat: str) -> bool:
-    return stat in set(PITCHER_MARKET_TO_STAT.values())
-
-
-def analysis_url_for(stat: str) -> str:
-    """The POU endpoint that can analyse this stat."""
-    return (
-        Env.MLB_PITCHER_ANALYSIS_API_URL
-        if is_pitcher_stat(stat)
-        else Env.MLB_ANALYSIS_API_URL
-    )
-
 TEAM_NAME_TO_ABV = {
     "Arizona Diamondbacks": "ARI",
     "Atlanta Braves": "ATL",
@@ -271,7 +236,7 @@ def do_analysis(
     return (
         ResultAsync.from_coro(
             client.post(
-                analysis_url_for(stat),
+                Env.MLB_ANALYSIS_API_URL,
                 content=msgspec.json.encode(payload),
                 headers={"Content-Type": "application/json"},
             ),
@@ -385,34 +350,13 @@ async def get_analysis_params(
                 return [], {}
         # fmt: on
 
-        # Pitching markets are a second request, and a failing one is survivable.
-        # The batter call above abandons the whole slate on error, which is the
-        # right call when it is the slate; it is the wrong call for an extra
-        # market a book may simply not offer. A miss here costs this event's
-        # pitcher props and nothing else.
-        market_to_stat = dict(MARKET_TO_STAT)
-        bookmakers = list(game.bookmakers)
-        match await fetch_game(
-            client, SPORT_KEY, event.id, REGION, PITCHER_MARKET_TO_STAT.keys()
-        ):
-            case Ok(pitcher_game):
-                logger.info(
-                    f"  Fetched pitcher markets: bookmakers {len(pitcher_game.bookmakers)}"
-                )
-                bookmakers.extend(pitcher_game.bookmakers)
-                market_to_stat.update(PITCHER_MARKET_TO_STAT)
-            case Err() as e:
-                logger.warning(
-                    f"  No pitcher markets for {event.home_team} vs {event.away_team}: {e!r}"
-                )
-
-        for bookmaker in bookmakers:
+        for bookmaker in game.bookmakers:
             logger.info(
                 f"    Bookmaker: {bookmaker.title} markets {len(bookmaker.markets)}"
             )
             for market in bookmaker.markets:
                 logger.info(f"      Market: {market.key}")
-                stat = market_to_stat.get(market.key)
+                stat = MARKET_TO_STAT.get(market.key)
                 if not stat:
                     continue
                 for outcome in market.outcomes:
@@ -444,15 +388,8 @@ async def get_analysis_params(
     limited_params: list[tuple[SportEvent, Outcome, str]] = []
     dropped_count = 0
     for grouped in grouped_params.values():
-        # Counted apart so a team's nine hitters cannot fill the cap and leave
-        # its starter off the board. Pitcher outcomes arrive after the batter
-        # ones, so a single shared cap would always trim them first.
-        hitters = [p for p in grouped if not is_pitcher_stat(p[2])]
-        pitchers = [p for p in grouped if is_pitcher_stat(p[2])]
-        limited_params.extend(hitters[:MAX_BETS_PER_TEAM_PER_GAME])
-        limited_params.extend(pitchers[:MAX_PITCHER_BETS_PER_TEAM_PER_GAME])
-        dropped_count += max(0, len(hitters) - MAX_BETS_PER_TEAM_PER_GAME)
-        dropped_count += max(0, len(pitchers) - MAX_PITCHER_BETS_PER_TEAM_PER_GAME)
+        limited_params.extend(grouped[:MAX_BETS_PER_TEAM_PER_GAME])
+        dropped_count += max(0, len(grouped) - MAX_BETS_PER_TEAM_PER_GAME)
 
     if dropped_count:
         logger.info(
