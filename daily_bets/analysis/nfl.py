@@ -9,6 +9,7 @@ from dateutil.parser import parse as parse_datetime
 from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
+from daily_bets.publication_receipt import attach_receipt
 from daily_bets.analysis.existing_bets import make_existing_bet_key
 from daily_bets.db import nfl_db as db
 from daily_bets.db import nfl_backup
@@ -242,7 +243,12 @@ def do_analysis(
             lambda e: HttpError(e),
         )
         .try_catch(
-            lambda res: res.text,
+            lambda res: attach_receipt(
+                res.text, request_json=msgspec.json.encode(payload),
+                endpoint_alias="NFL_ANALYSIS_API_URL",
+                event_id=event.id, event_start=event.commence_time,
+                publisher_job="nfl",
+            ),
             lambda e: DecodeError(e),
         )
         # Decode to validate recommendation vs line direction, but keep raw text for storage

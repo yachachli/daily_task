@@ -8,6 +8,7 @@ import msgspec
 from dateutil.parser import parse as parse_datetime
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
+from daily_bets.publication_receipt import attach_receipt
 from daily_bets.analysis.existing_bets import make_existing_bet_key
 from daily_bets.db import mlb_backup
 from daily_bets.db import mlb_db as db
@@ -247,7 +248,12 @@ def do_analysis(
             lambda e: HttpError(e),
         )
         .try_catch(
-            lambda res: res.text,
+            lambda res: attach_receipt(
+                res.text, request_json=msgspec.json.encode(payload),
+                endpoint_alias="MLB_ANALYSIS_API_URL",
+                event_id=event.id, event_start=event.commence_time,
+                publisher_job="mlb",
+            ),
             lambda e: DecodeError(e),
         )
         # The backend picks the side from the player's history; the row must
