@@ -1,9 +1,7 @@
 name: Daily NBA Games Predictions
 
 on:
-  schedule:
-    # 1:00 AM PST / 9:00 UTC — runs before games to cover tomorrow + day after
-    - cron: "0 9 * * *"
+  # Scheduled publication now runs after ingestion in db_update/nba-game-update.yml.
   workflow_dispatch:
 
 jobs:
@@ -35,3 +33,4 @@ jobs:
           DB_PASS: ${{ secrets.DB_PASS }}
           DB_HOST: ${{ secrets.DB_HOST }}
         run: uv run -m daily_bets.scripts.sync_daily_nba_games
+

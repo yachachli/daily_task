@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+from zoneinfo import ZoneInfo
 from collections.abc import Sequence
 from typing import Any
 
@@ -149,9 +150,9 @@ ON CONFLICT (prediction_date, home_team, away_team)
 DO UPDATE SET
     predicted_winner = EXCLUDED.predicted_winner,
     predicted_spread = EXCLUDED.predicted_spread,
-    vegas_spread = EXCLUDED.vegas_spread,
-    vegas_home_moneyline = EXCLUDED.vegas_home_moneyline,
-    vegas_away_moneyline = EXCLUDED.vegas_away_moneyline,
+    vegas_spread = COALESCE(EXCLUDED.vegas_spread, nba_game_predictions.vegas_spread),
+    vegas_home_moneyline = COALESCE(EXCLUDED.vegas_home_moneyline, nba_game_predictions.vegas_home_moneyline),
+    vegas_away_moneyline = COALESCE(EXCLUDED.vegas_away_moneyline, nba_game_predictions.vegas_away_moneyline),
     home_win_prob = EXCLUDED.home_win_prob,
     away_win_prob = EXCLUDED.away_win_prob,
     confidence = EXCLUDED.confidence,
@@ -345,7 +346,7 @@ async def backfill_recent_predictions(
 
 
 async def get_connection() -> asyncpg.Connection:
-    database_url = os.getenv("NEON_DATABASE_URL")
+    database_url = os.getenv("NEON_DATABASE_URL") or os.getenv("DB_URL")
     if database_url:
         return await asyncpg.connect(dsn=database_url)
 
@@ -380,10 +381,19 @@ async def sync_predictions_for_date(
     if not isinstance(predictions_raw, list):
         raise RuntimeError("Predictor response is missing list field 'predictions'.")
 
+    if date_raw != target_date:
+        raise RuntimeError("Prediction endpoint returned the wrong date")
     prediction_date = parse_prediction_date(date_raw)
     predictions: list[dict[str, Any]] = [
         p for p in predictions_raw if isinstance(p, dict)
     ]
+
+    season_start=prediction_date.year if prediction_date.month>=10 else prediction_date.year-1
+    expected_season=f"{season_start}-{(season_start+1)%100:02d}"
+    for prediction in predictions:
+        context=prediction.get('model_context') or {}
+        if context.get('season')!=expected_season or (context.get('data_freshness') or {}).get('status')!='complete':
+            raise RuntimeError('Prediction lacks verified current-season input provenance')
 
     if not predictions:
         print(f"No games found for {prediction_date.isoformat()}, skipping.")
@@ -401,6 +411,12 @@ async def sync_predictions_for_date(
         odds_by_matchup = await fetch_vegas_odds(
             conn, start_date=backfill_start, end_date=backfill_end,
         )
+        existing = await conn.fetch('SELECT home_team,away_team,vegas_spread,vegas_home_moneyline,vegas_away_moneyline FROM nba_game_predictions WHERE prediction_date=$1',prediction_date)
+        for r in existing:
+            key=build_matchup_key(prediction_date,r['home_team'],r['away_team'])
+            if key not in odds_by_matchup:
+                odds_by_matchup[key]={'spread':float(r['vegas_spread']) if r['vegas_spread'] is not None else None,
+                    'home_moneyline':r['vegas_home_moneyline'],'away_moneyline':r['vegas_away_moneyline']}
         rows: Sequence[tuple[Any, ...]] = [
             row_values(
                 prediction_date=prediction_date,
@@ -447,7 +463,7 @@ async def main() -> None:
     bearer_token = os.getenv("NBA_GAME_PREDICTOR_BEARER_TOKEN")
     github_run_id = os.getenv("GITHUB_RUN_ID")
 
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now(ZoneInfo("America/New_York")).date()
     target_dates = [
         today.strftime("%Y%m%d"),
         (today + dt.timedelta(days=1)).strftime("%Y%m%d"),
@@ -458,16 +474,21 @@ async def main() -> None:
     try:
         await conn.execute(CREATE_TABLE_SQL)
         await conn.execute(ALTER_TABLE_SQL)
+        failures = []
         for target_date in target_dates:
             try:
                 await sync_predictions_for_date(
                     conn, endpoint, bearer_token, github_run_id, target_date
                 )
             except Exception as exc:
-                print(f"Warning: failed to sync predictions for {target_date}: {exc}")
+                failures.append(target_date)
+                print(f"ERROR: failed to sync predictions for {target_date}: {exc}")
+        if failures:
+            raise RuntimeError(f"NBA prediction publication failed for {failures}")
     finally:
         await conn.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
