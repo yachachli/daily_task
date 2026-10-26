@@ -425,6 +425,7 @@ async def run(pool: DBPool):
             do_analysis,
             batch_size=10,
         )
+        analysis_error_count = 0
         for res in analysis_jsons:
             # fmt: off
             match res:
@@ -434,6 +435,7 @@ async def run(pool: DBPool):
                     if isinstance(e, SkipBetError):
                         logger.info(f"Skipping bet: {e}")  # noqa: E701
                     else:
+                        analysis_error_count += 1
                         logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
             # fmt: on
 
@@ -490,3 +492,8 @@ async def run(pool: DBPool):
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
     print(f"Inserted {upsert_count} records; backup sync inserted {backup_inserted}")
+    if analysis_error_count:
+        raise RuntimeError(
+            f"NFL analysis failed for {analysis_error_count} outcomes; "
+            f"published {upsert_count} records before failing the run"
+        )
