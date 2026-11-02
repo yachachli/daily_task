@@ -20,7 +20,7 @@ async def main():
 
     if not pool:
         print("Failed to create database pool.")
-        return
+        raise RuntimeError("Database pool unavailable")
 
     if len(sys.argv) < 2:
         logger.error(f"No sport provided. Usage {sys.argv[0]} <sport>")
@@ -33,7 +33,8 @@ async def main():
         case "nba":
             await nba.run(pool)
         case "nba_alt":
-            await nba_alt.run(pool)
+            from daily_bets.publisher_guard import guarded_publish
+            await guarded_publish(pool, nba_alt.run)
         case "wnba":
             await wnba.run(pool)
         case _:

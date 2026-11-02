@@ -293,13 +293,15 @@ async def get_analysis_params(
             ...
         case Err() as e:
             logger.error(f"Error fetching tomorrow's NBA events: {e!r}")
-            return []
+            raise RuntimeError("NBA event fetch failed")
 
     for event in events:
         logger.info(f"Processing event: {event.home_team} vs {event.away_team}")
         game_dt = datetime.fromisoformat(
             event.commence_time.replace("Z", "+00:00")
         ).date()
+        if parse_datetime(event.commence_time) <= datetime.now(timezone.utc):
+            continue
         if game_dt > end_date:
             continue
 
@@ -313,7 +315,7 @@ async def get_analysis_params(
             case Ok(game): logger.info( f"  Fetched game: {game.home_team} vs {game.away_team} bookmakers {len(game.bookmakers)}")  # noqa: E701
             case Err() as e:
                 logger.error(f"Error fetching game: {e!r}")
-                return []
+                raise RuntimeError(f"NBA market fetch failed for event {event.id}")
         # fmt: on
 
         for bookmaker in game.bookmakers:
@@ -331,6 +333,7 @@ async def get_analysis_params(
                 for outcome in market.outcomes:
                     params.add((event, outcome, stat))
 
+    logger.info(f"Fetched {len(params)} NBA market outcomes (zero can mean no posted markets)")
     return list(params)
 
 
@@ -344,6 +347,12 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, end_date)
+        market_count = len(analysis_params)
+        if analysis_params and not any(
+            resolve_player_context(nba_alt_map, event, outcome.description)
+            for event, outcome, _ in analysis_params
+        ):
+            raise RuntimeError("NBA markets are available but no player identities resolve")
         analysis_params = await filter_existing_analysis_params(
             pool, nba_alt_map, analysis_params
         )
@@ -365,7 +374,7 @@ async def run(pool: DBPool):
         for res in analysis_jsons:
             # fmt: off
             match res:
-                case Ok(analysis_params): copy_params.append(analysis_params)  # noqa: E701
+                case Ok(analysis_row): copy_params.append(analysis_row)  # noqa: E701
                 case Err(e): logger.error(f"Error handling outcome: {e!r}")  # noqa: E701
             # fmt: on
 
@@ -421,4 +430,15 @@ async def run(pool: DBPool):
         except Exception as e:
             logger.error(f"Backup maintenance failed: {e!r}")
             backup_inserted = 0
-    print(f"Inserted {upsert_count} records; backup sync inserted {backup_inserted}")
+    print(f"Inserted {upsert_count} records; backup sync inserted {backup_inserted}", flush=True)
+    failures = len(analysis_params) - len(copy_params)
+    if failures:
+        raise RuntimeError(f"NBA scoring incomplete: {failures}/{len(analysis_params)} requests failed; successful rows retained for retry")
+    # Prove successful analyses reached the app-facing table. A retry must not
+    # report success merely because the request loop completed.
+    if copy_params:
+        remaining = await filter_existing_analysis_params(pool, nba_alt_map, analysis_params)
+        if remaining:
+            raise RuntimeError(f"NBA publication incomplete: {len(remaining)} analyzed props missing from storage")
+    return {"market_outcomes": market_count, "analyzed": len(analysis_params),
+            "inserted": upsert_count, "status": "published" if copy_params else "no_new_resolvable_markets"}

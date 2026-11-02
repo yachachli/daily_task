@@ -2,13 +2,23 @@ name: Daily NBA Alt Bets Analysis
 
 on:
   schedule:
-    # 11:30 PM Pacific Standard Time / 07:30 UTC
+    # Primary 08:15 UTC; backups recheck current markets and skip stored props.
+    # GitHub cron is best-effort, including these backup triggers.
     - cron: "15 8 * * *"
+    - cron: "37 11,14,17,20 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nba-app-props-publisher
+  cancel-in-progress: false
 
 jobs:
   run-analysis:
     runs-on: ubuntu-latest
+    timeout-minutes: 135
     strategy:
       matrix:
         sport: [nba_alt]
@@ -30,7 +40,7 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - name: Run Analysis
+      - name: Run guarded NBA app publisher (retry once on failure)
         env:
           API_KEY: ${{ secrets.API_KEY }}
           NFL_ANALYSIS_API_URL: ${{ secrets.NFL_ANALYSIS_API_URL }}
@@ -44,3 +54,8 @@ jobs:
           DB_HOST: ${{ secrets.DB_HOST }}
           TRANSLATE_ES_URL: ${{ secrets.TRANSLATE_ES_URL }}
         run: uv run -m daily_bets ${{ matrix.sport }}
+
+      - name: Explain exhausted recovery
+        if: failure()
+        run: |
+          echo "::error::NBA app props publication failed. Review the Run Analysis logs and the next backup run; a green job must not be treated as proof of full slate coverage."
