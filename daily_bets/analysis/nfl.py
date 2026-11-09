@@ -48,7 +48,7 @@ MARKET_TO_STAT: dict[str, str] = {
     "player_rush_yds": "rush yards",
     # "player_sacks": "sacks",
     "player_tds_over": "pass + rush + rec tds",
-    "player_anytime_td": "pass + rush + rec tds",
+    # "player_anytime_td" omitted: yes/no market with no line, can't be scored as over/under
     "player_reception_yds_alternate": "rec yards",
     "player_rush_reception_yds_alternate": "rush + rec yards",
     "player_rush_reception_tds_alternate": "rush + rec tds",
@@ -252,8 +252,11 @@ def do_analysis(
             lambda e: DecodeError(e),
         )
         # Decode to validate recommendation vs line direction, but keep raw text for storage
-        .map(lambda text: (text, msgspec.json.decode(text, type=BetAnalysis)))
-        .try_catch(lambda pair: pair, lambda e: DecodeError(e))
+        # try_catch (not map) so one malformed response skips this bet instead of crashing the run
+        .try_catch(
+            lambda text: (text, msgspec.json.decode(text, type=BetAnalysis)),
+            lambda e: DecodeError(e),
+        )
         .map(lambda pair: (
             pair[0],
             pair[1].over_under.lower() if pair[1].over_under is not None else None,
