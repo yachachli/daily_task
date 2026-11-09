@@ -88,6 +88,23 @@ def fetch_tomorrow_events(
     )
 
 
+def _decode_game(text: str) -> Game:
+    """Decode an event-odds payload, dropping outcomes that carry no line.
+
+    Yes/no markets (e.g. Dabble's `player_anytime_td`) return outcomes without
+    `point`. Decoding them straight into `Outcome` rejects the whole game, which
+    silently drops every prop from every book for that event.
+    """
+    raw = msgspec.json.decode(text, type=dict[str, t.Any])
+    bookmakers: list[dict[str, t.Any]] = raw.get("bookmakers") or []
+    for bookmaker in bookmakers:
+        markets: list[dict[str, t.Any]] = bookmaker.get("markets") or []
+        for market in markets:
+            outcomes: list[dict[str, t.Any]] = market.get("outcomes") or []
+            market["outcomes"] = [o for o in outcomes if o.get("point") is not None]
+    return msgspec.convert(raw, type=Game)
+
+
 def fetch_game(
     client: httpx.AsyncClient,
     sport_key: str,
@@ -128,7 +145,7 @@ def fetch_game(
             lambda e: HttpError(e),
         )
         .try_catch(
-            lambda res: msgspec.json.decode(res.text, type=Game),
+            lambda res: _decode_game(res.text),
             lambda e: DecodeError(e),
         )
     )
