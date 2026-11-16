@@ -2,9 +2,11 @@ name: Daily NBA Alt Bets Analysis
 
 on:
   schedule:
-    # Primary 08:15 UTC; backups recheck current markets and skip stored props.
+    # Start after the overnight game refresh has had its full hour to finish.
+    # Backups recheck current markets and skip stored props.
     # GitHub cron is best-effort, including these backup triggers.
-    - cron: "15 8 * * *"
+    - cron: "45 1 * * *"
+      timezone: "America/Los_Angeles"
     - cron: "37 11,14,17,20 * * *"
   workflow_dispatch:
 

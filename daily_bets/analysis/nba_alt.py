@@ -2,6 +2,7 @@ import asyncio
 import json
 import typing as t
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 import msgspec.json
@@ -20,6 +21,7 @@ from daily_bets.models import (
     BetAnalysisInput,
 )
 from daily_bets.db import nba_backup
+from daily_bets.db.nba_stats_readiness import require_verified_stats
 from daily_bets.odds_api import (
     HttpError,
     Outcome,
@@ -348,6 +350,9 @@ async def run(pool: DBPool):
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, end_date)
         market_count = len(analysis_params)
+        if analysis_params:
+            through = datetime.now(ZoneInfo("America/Los_Angeles")).date() - timedelta(days=1)
+            await require_verified_stats(pool, through)
         if analysis_params and not any(
             resolve_player_context(nba_alt_map, event, outcome.description)
             for event, outcome, _ in analysis_params
