@@ -35,7 +35,7 @@ class FetchTests(unittest.IsolatedAsyncioTestCase):
         fetch.assert_not_awaited()
 
 class PublicationTests(unittest.IsolatedAsyncioTestCase):
-    async def run_case(self, responses, remaining):
+    async def run_case(self, responses, remaining, readiness_error=None):
         from contextlib import ExitStack
         from types import SimpleNamespace
         connection = AsyncMock()
@@ -49,6 +49,7 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
             for target, value in [
                 ('NbaAltMap.from_db', AsyncMock(return_value=object())),
                 ('get_analysis_params', AsyncMock(return_value=params)),
+                ('require_verified_stats', AsyncMock(side_effect=readiness_error)),
                 ('resolve_player_context', lambda *args: (1,'BOS','DAL','DAL@BOS')),
                 ('filter_existing_analysis_params', AsyncMock(side_effect=[params, remaining])),
                 ('batch_calls_result_async', AsyncMock(return_value=responses)),
@@ -58,7 +59,17 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
                 ('Env.TRANSLATE_ES_URL', ''),
             ]:
                 stack.enter_context(patch('daily_bets.analysis.nba_alt.'+target, value))
-            return await nba_alt.run(pool)
+            try:
+                return await nba_alt.run(pool)
+            finally:
+                if readiness_error:
+                    nba_alt.filter_existing_analysis_params.assert_not_awaited()
+                    nba_alt.batch_calls_result_async.assert_not_awaited()
+                    nba_alt.db.nba_upsert_analysis.assert_not_awaited()
+
+    async def test_missing_stats_block_before_scoring_or_inserting(self):
+        with self.assertRaisesRegex(RuntimeError, 'NBA_STATS_NOT_READY'):
+            await self.run_case([], [], RuntimeError('NBA_STATS_NOT_READY'))
 
     async def test_all_scoring_errors_fail_job(self):
         with self.assertRaisesRegex(RuntimeError, 'scoring incomplete'):
