@@ -7,7 +7,7 @@ from .publication_contract import receipt, acknowledge, ack_insert_sql, quote_sn
 
 
 def attach_receipt(response_text, *, request_json, endpoint_alias, event_id,
-                   event_start, publisher_job, environ=None, now=None, quote_evidence=None):
+                   event_start, publisher_job, environ=None, now=None, quote_evidence=None, game_tag=None):
     if publisher_job not in {'nfl', 'nba', 'nba_alt'}:
         from .legacy_publication_receipt import attach_receipt as legacy
         return legacy(response_text, request_json=request_json, endpoint_alias=endpoint_alias,
@@ -25,7 +25,7 @@ def attach_receipt(response_text, *, request_json, endpoint_alias, event_id,
     }
     payload = receipt(response_text, request=json.loads(request_json), publisher=publisher,
                       event_id=event_id, event_start=event_start, now=now,
-                      quote_evidence=quote_evidence)
+                      quote_evidence=quote_evidence,game_tag=game_tag)
     return json.dumps(payload, separators=(',', ':'), allow_nan=False)
 
 

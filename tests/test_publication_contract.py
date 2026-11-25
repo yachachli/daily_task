@@ -17,7 +17,7 @@ def sample():
                    forecast_generated_at='2030-01-02T12:00:00Z',
                    model_provenance=dict(deployment_revision='revision', source_manifest_sha256='a'*64))
     return receipt(json.dumps(payload), event_id='event', event_start=START,
-                   publisher={'publisher_repository':'example/publisher'},
+                   publisher={'publisher_repository':'example/publisher'},game_tag='A@B',
                    now=datetime(2030,1,2,12,1,tzinfo=timezone.utc))
 
 
@@ -61,7 +61,7 @@ class ContractTests(unittest.TestCase):
     def test_missing_artifact_or_generation_metadata_stays_unknown(self):
         for key in ['forecast_generated_at','model_provenance','model_version']:
             original=json.loads(sample()['_publication_receipt']['response_text']);original.pop(key)
-            a=receipt(json.dumps(original), event_id='event',event_start=START,publisher={},
+            a=receipt(json.dumps(original), event_id='event',event_start=START,publisher={},game_tag='A@B',
                       now=datetime(2030,1,2,12,1,tzinfo=timezone.utc))
             self.assertIsNone(timing(a,None,START,TABLE,publication(a))[0])
 

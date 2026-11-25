@@ -221,7 +221,7 @@ def do_analysis(
                 res.text, request_json=msgspec.json.encode(payload),
                 endpoint_alias="NBA_ALT_ANALYSIS_API_URL",
                 event_id=event.id, event_start=event.commence_time,
-                publisher_job="nba_alt", quote_evidence=quote_evidence,
+                publisher_job="nba_alt", quote_evidence=quote_evidence, game_tag=game_tag,
             ),
             lambda e: DecodeError(e),
         )

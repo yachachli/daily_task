@@ -41,7 +41,7 @@ def aware_now(value=None):
 
 
 def receipt(response_text, *, event_id, event_start, publisher, request=None,
-            quote_evidence=None, now=None):
+            quote_evidence=None, now=None, game_tag=None):
     payload = json.loads(response_text)
     if not isinstance(payload, dict) or '_publication_receipt' in payload:
         raise ValueError('Expected a response without reserved publication metadata')
@@ -50,6 +50,7 @@ def receipt(response_text, *, event_id, event_start, publisher, request=None,
         raise ValueError('Explicit event timezone required')
     evidence = dict(schema=SCHEMA, response_received_at=aware_now(now),
                     event_id=str(event_id), scheduled_start=start, publisher=publisher,
+                    source_event_tag=game_tag,
                     request=request, quote_evidence=quote_evidence,
                     forecast_generated_at=utc(payload.get('forecast_generated_at')),
                     model_version=payload.get('model_version'),
@@ -94,6 +95,8 @@ def acknowledge(analysis, *, source_table, event_start, now=None,
     if source_table not in TABLES or not valid_receipt(analysis, event_start):
         raise ValueError('Publication acknowledgement requires an exact supported receipt')
     r = analysis['_publication_receipt']
+    if not r.get('source_event_tag'):
+        raise ValueError('Publication requires the exact source event tag')
     at = aware_now(now)
     if r.get('forecast_generated_at') and r['forecast_generated_at'] > at:
         raise ValueError('Generation occurs after acknowledgement')
@@ -102,6 +105,7 @@ def acknowledge(analysis, *, source_table, event_start, now=None,
     event = dict(schema='publication-ack-v1', receipt_id=r['receipt_id'],
                  source_table=source_table, forecast_payload_sha256=r['forecast_payload_sha256'],
                  acknowledged_at=at, scheduled_start=r['scheduled_start'],
+                 source_event_tag=r['source_event_tag'],
                  publication_basis=basis,
                  app_exposure_verified=False)
     event['ack_id'] = sha(event)
@@ -120,6 +124,8 @@ def ack_insert_sql(source_table, *, asyncpg=False):
                ({placeholders[0]}::jsonb->>'acknowledged_at')::timestamptz, {placeholders[0]}::jsonb
         FROM {source_table}
         WHERE analysis->'_publication_receipt'->>'receipt_id'={placeholders[1]}
+        AND game_tag={placeholders[0]}::jsonb->>'source_event_tag'
+        AND game_time=({placeholders[0]}::jsonb->>'scheduled_start')::timestamptz
         ON CONFLICT (source_table, source_row, receipt_id) DO NOTHING'''
 
 
@@ -135,7 +141,7 @@ def missing_publications_sql(source_table):
         ORDER BY id LIMIT 1000'''
 
 
-def timing(analysis, source_created_at, event_start, source_table, publication=None):
+def timing(analysis, source_created_at, event_start, source_table, publication=None, *, game_tag=None):
     """Keep naive historical times unknown; never turn response arrival into publication."""
     raw = str(source_created_at) if source_created_at is not None else None
     r = analysis.get('_publication_receipt') or {}
@@ -151,6 +157,8 @@ def timing(analysis, source_created_at, event_start, source_table, publication=N
     # Invalid new metadata must not inherit a legacy proxy's apparent certainty.
     evidence['publication_basis'] = 'unverified_receipt_or_acknowledgement'
     if not valid_receipt(analysis, event_start):
+        return None, evidence
+    if game_tag is not None and r.get('source_event_tag')!=game_tag:
         return None, evidence
     generated = utc(r.get('forecast_generated_at'))
     received = utc(r.get('response_received_at'))
@@ -184,6 +192,8 @@ def timing(analysis, source_created_at, event_start, source_table, publication=N
             and ack.get('publication_basis') in {'source_insert_commit_acknowledged_by',
                                                 'committed_source_row_reobserved_by_publisher'}
             and ack.get('scheduled_start') == utc(event_start) and received <= confirmed):
+        return None, evidence
+    if not ack.get('source_event_tag') or ack['source_event_tag']!=r.get('source_event_tag'):
         return None, evidence
     evidence.update(publication_confirmed_by=max(confirmed, recorded),
                     publication_basis=ack.get('publication_basis'),
