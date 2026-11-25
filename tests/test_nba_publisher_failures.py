@@ -55,6 +55,8 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
                 ('batch_calls_result_async', AsyncMock(return_value=responses)),
                 ('db.nba_dedupe_recent_analysis', AsyncMock(return_value=0)),
                 ('db.nba_upsert_analysis', AsyncMock(return_value=1)),
+                ('record_publication', AsyncMock()),
+                ('recover_publications', AsyncMock(return_value=0)),
                 ('nba_backup.run_backup_maintenance', AsyncMock(return_value=0)),
                 ('Env.TRANSLATE_ES_URL', ''),
             ]:
