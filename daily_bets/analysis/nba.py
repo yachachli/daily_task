@@ -8,7 +8,7 @@ from dateutil.parser import parse as parse_datetime
 from msgspec import DecodeError
 from neverraise import Err, ErrAsync, Ok, ResultAsync
 
-from daily_bets.publication_receipt import attach_receipt
+from daily_bets.publication_receipt import attach_receipt, record_publication, freeze_quote, QuoteBatch, record_quotes, recover_publications
 from daily_bets.analysis.existing_bets import make_existing_bet_key
 from daily_bets.db import nba_alt_db as db
 from daily_bets.db_pool import DBPool
@@ -145,6 +145,7 @@ def do_analysis(
     event: SportEvent,
     outcome: Outcome,
     stat: str,
+    quote_evidence=None,
 ) -> ResultAsync[
     db.NbaAltCopyAnalysisParams,
     NoTeamFoundError | NoPlayerFoundError | HttpError | DecodeError,
@@ -217,7 +218,7 @@ def do_analysis(
                 res.text, request_json=msgspec.json.encode(payload),
                 endpoint_alias="NBA_ANALYSIS_API_URL",
                 event_id=event.id, event_start=event.commence_time,
-                publisher_job="nba",
+                publisher_job="nba", quote_evidence=quote_evidence, game_tag=game_tag,
             ),
             lambda e: DecodeError(e),
         )
@@ -252,7 +253,8 @@ async def filter_existing_analysis_params(
             for row in await db.nba_alt_recent_analysis_keys(conn, days=1)
             if row.stat is not None
         }
-        for event, outcome, stat in params:
+        for param in params:
+            event, outcome, stat = param[:3]
             resolved = resolve_player_context(nba_map, event, outcome.description)
             if not resolved:
                 unresolved_count += 1
@@ -273,7 +275,7 @@ async def filter_existing_analysis_params(
                 )
                 continue
             existing_keys.add(key)
-            filtered.append((event, outcome, stat))
+            filtered.append(param)
 
     if skipped_count:
         logger.info(f"Skipped {skipped_count} existing NBA alt bets before analysis")
@@ -288,6 +290,8 @@ async def get_analysis_params(
     client: httpx.AsyncClient, end_date: date
 ) -> list[tuple[SportEvent, Outcome, str]]:
     params: set[tuple[SportEvent, Outcome, str]] = set()
+    quotes = {}
+    all_quotes = []
 
     match await fetch_tomorrow_events(client, SPORT_KEY):
         case Ok(events):
@@ -320,6 +324,7 @@ async def get_analysis_params(
         # Add delay to prevent rate limiting (429 errors)
         await asyncio.sleep(0.2)
 
+        quote_observed_at = datetime.now(timezone.utc)
         for bookmaker in game.bookmakers:
             logger.info(
                 f"    Bookmaker: {bookmaker.title} markets {len(bookmaker.markets)}"
@@ -334,8 +339,11 @@ async def get_analysis_params(
                     continue
                 for outcome in market.outcomes:
                     params.add((event, outcome, stat))
+                    frozen = freeze_quote(game, bookmaker, market, outcome, quote_observed_at)
+                    all_quotes.append(frozen)
+                    quotes.setdefault((event, outcome, stat), frozen)
 
-    return list(params)
+    return QuoteBatch([(*param, quotes[param]) for param in params], all_quotes)
 
 
 async def run(pool: DBPool):
@@ -348,6 +356,7 @@ async def run(pool: DBPool):
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         analysis_params = await get_analysis_params(client, end_date)
+        await record_quotes(pool, analysis_params)
         analysis_params = await filter_existing_analysis_params(
             pool, nba_map, analysis_params
         )
@@ -360,8 +369,9 @@ async def run(pool: DBPool):
                     event,
                     outcome,
                     stat,
+                    _quote[0] if _quote else None,
                 )
-                for event, outcome, stat in analysis_params
+                for event, outcome, stat, *_quote in analysis_params
             ],
             do_analysis,
             batch_size=5,
@@ -378,9 +388,10 @@ async def run(pool: DBPool):
         dedupe_count = await db.nba_alt_dedupe_recent_analysis(conn, days=1)
         if dedupe_count:
             logger.info(f"Deleted {dedupe_count} recent duplicate NBA alt bets")
+        await recover_publications(conn, "public.v2_nba_alt_daily_bets")
         upsert_count = 0
         for param in copy_params:
-            upsert_count += (
+            inserted = (
                 await db.nba_alt_upsert_analysis(
                     conn,
                     analysis_json=param.analysis,
@@ -390,6 +401,9 @@ async def run(pool: DBPool):
                 )
                 or 0
             )
+            upsert_count += inserted
+            if inserted:
+                await record_publication(conn, analysis_text=param.analysis, source_table="public.v2_nba_alt_daily_bets", event_start=param.game_time)
         try:
             backup_inserted = await nba_alt_backup.run_backup_maintenance(conn, days=14)
         except Exception as e:
